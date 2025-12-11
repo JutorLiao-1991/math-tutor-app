@@ -14,7 +14,7 @@ col1, col2 = st.columns([1, 4]) # 比例 1:4
 
 with col1:
     # 這裡預設檔名為 logo.png，如果你上傳的是 jpg，請改成 logo.jpg
-    if os.path.exists("logo.png"):
+    if os.path.exists("logo.jpg"):
         st.image("logo.png", use_column_width=True)
     else:
         # 如果找不到圖片，顯示一個替代圖示
