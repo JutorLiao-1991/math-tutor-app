@@ -8,7 +8,10 @@ import random
 import re
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from googleapiclient.discovery import build # 用來操作 Google Drive
+from googleapiclient.http import MediaIoBaseUpload
 from datetime import datetime
+import io
 
 # --- 頁面設定 ---
 st.set_page_config(page_title="鳩特數理ＡＩ小幫手", page_icon="🦔", layout="centered")
@@ -42,8 +45,49 @@ def trigger_vibration():
     vibrate_js = """<script>if(navigator.vibrate){navigator.vibrate(30);}</script>"""
     components.html(vibrate_js, height=0, width=0)
 
-# --- 函數：寫入 Google Sheets (背景執行) ---
-def save_to_google_sheets(grade, question, mode, full_response):
+# --- 函數：上傳圖片到 Google Drive (新功能) ---
+def upload_to_drive(uploaded_file, question_text):
+    try:
+        if "gcp_service_account" not in st.secrets or "DRIVE_FOLDER_ID" not in st.secrets:
+            return "未設定 Drive ID"
+
+        # 1. 驗證與連線
+        scope = ['https://www.googleapis.com/auth/drive']
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        service = build('drive', 'v3', credentials=creds)
+
+        # 2. 準備檔案
+        file_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{question_text[:10]}.jpg"
+        folder_id = st.secrets["DRIVE_FOLDER_ID"]
+        
+        file_metadata = {
+            'name': file_name,
+            'parents': [folder_id]
+        }
+        
+        # 轉換檔案格式以供上傳
+        # 必須把指標歸零，不然上傳的會是空檔案
+        uploaded_file.seek(0)
+        media = MediaIoBaseUpload(uploaded_file, mimetype=uploaded_file.type)
+
+        # 3. 執行上傳
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, webViewLink'
+        ).execute()
+        
+        # 4. 回傳檔案的連結
+        return file.get('webViewLink')
+
+    except Exception as e:
+        print(f"Drive 上傳失敗: {e}")
+        return f"上傳失敗: {e}"
+
+# --- 函數：寫入 Google Sheets (新增 image_link 參數) ---
+def save_to_google_sheets(grade, question, mode, full_response, image_link):
     try:
         if "gcp_service_account" in st.secrets:
             scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -53,11 +97,11 @@ def save_to_google_sheets(grade, question, mode, full_response):
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             client = gspread.authorize(creds)
             
-            # 請確保 Sheet 名稱正確
             sheet = client.open("Jutor_Learning_Data").sheet1
             
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            sheet.append_row([timestamp, grade, mode, question, full_response])
+            # 新增一欄：學生圖片連結
+            sheet.append_row([timestamp, grade, mode, question, full_response, image_link])
             return True
     except Exception as e:
         print(f"雲端存檔失敗: {e}")
@@ -107,8 +151,6 @@ with col1:
 with col2:
     st.title("鳩特數理ＡＩ小幫手")
 
-# 【已移除】老師後台的 Expander 區塊已完全刪除
-
 # --- 年級 ---
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -151,7 +193,7 @@ if not st.session_state.is_solving:
                 
                 with st.spinner(loading_text):
                     try:
-                        # 防護網指令
+                        # 防護網
                         guardrail_instruction = """
                         【最高防護指令：非課業過濾】
                         請先檢查圖片內容與使用者問題。
@@ -165,19 +207,13 @@ if not st.session_state.is_solving:
                             {guardrail_instruction}
                             角色：你是一位幽默、親切、很會講譬喻的數學家教「Jutor」。
                             學生年級：【{selected_grade}】。指定題目：【{question_target}】。
-
                             【核心風格：口語化教學】
-                            1. **白話解釋**：把數學觀念變成生活例子。例如：不要只說「分配律」，要說「括號外面的人跟裡面每個人握手」。
-                            2. **禁止說教**：語氣要像朋友，多用「我們來試試看」、「你看喔」。
-                            3. **原子化步驟**：雖然是口語，但還是要拆成小步驟，讓學生一步一步跟上。
-
+                            1. **白話解釋**：把數學觀念變成生活例子。
+                            2. **禁止說教**：語氣要像朋友。
+                            3. **原子化步驟**：拆成小步驟。
                             【結構要求】
                             每個步驟之間插入分隔符號： ===STEP===
-                            1. 第一步：用白話確認題目 ===STEP===
-                            2. 第二步：解題思路（用譬喻法） ===STEP===
-                            3. 第三步開始：逐步計算與講解 ===STEP===
-                            ...
-                            最後結構：本題答案 ===STEP=== 【驗收類題】(數字不同邏輯相同，僅題目) ===STEP=== 【類題詳解】
+                            最後結構：本題答案 ===STEP=== 【驗收類題】(僅題目) ===STEP=== 【類題詳解】
                             """
                         else:
                             prompt = f"""
@@ -205,7 +241,13 @@ if not st.session_state.is_solving:
                             st.session_state.qa_history = []
                             st.session_state.data_saved = False
 
-                            save_to_google_sheets(selected_grade, question_target, "指令教學" if mode=="verbal" else "純算式", response.text)
+                            # --- 背景任務：上傳圖片 + 存檔 Sheet ---
+                            # 1. 上傳圖片到 Drive 取得連結
+                            image_link = upload_to_drive(uploaded_file, question_target)
+                            
+                            # 2. 存入 Sheet (包含連結)
+                            save_to_google_sheets(selected_grade, question_target, "指令教學" if mode=="verbal" else "純算式", response.text, image_link)
+                            
                             st.rerun()
 
                     except Exception as e:
