@@ -7,12 +7,8 @@ import streamlit.components.v1 as components
 import random
 import re
 import gspread
-# --- 【修正 1】改用現代的驗證套件 ---
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
 from datetime import datetime
-import io
 
 # --- 頁面設定 ---
 st.set_page_config(page_title="鳩特數理ＡＩ小幫手", page_icon="🦔", layout="centered")
@@ -46,63 +42,22 @@ def trigger_vibration():
     vibrate_js = """<script>if(navigator.vibrate){navigator.vibrate(30);}</script>"""
     components.html(vibrate_js, height=0, width=0)
 
-# --- 函數：上傳圖片到 Google Drive ---
-def upload_to_drive(uploaded_file, question_text):
-    try:
-        if "gcp_service_account" not in st.secrets or "DRIVE_FOLDER_ID" not in st.secrets:
-            return "未設定 Drive ID"
-
-        # 【修正 2】使用新的 Credentials 驗證方式
-        # scopes 參數名稱不同，要注意
-        scope = ['https://www.googleapis.com/auth/drive']
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-        
-        # 新式驗證寫法
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
-        service = build('drive', 'v3', credentials=creds)
-
-        # 準備檔案
-        file_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{question_text[:10]}.jpg"
-        folder_id = st.secrets["DRIVE_FOLDER_ID"]
-        
-        file_metadata = {
-            'name': file_name,
-            'parents': [folder_id]
-        }
-        
-        uploaded_file.seek(0)
-        media = MediaIoBaseUpload(uploaded_file, mimetype=uploaded_file.type)
-
-        file = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id, webViewLink'
-        ).execute()
-        
-        return file.get('webViewLink')
-
-    except Exception as e:
-        print(f"Drive 上傳失敗: {e}")
-        return f"上傳失敗: {e}"
-
-# --- 函數：寫入 Google Sheets ---
-def save_to_google_sheets(grade, question, mode, full_response, image_link):
+# --- 函數：寫入 Google Sheets (存文字描述版) ---
+def save_to_google_sheets(grade, mode, image_desc, full_response):
     try:
         if "gcp_service_account" in st.secrets:
-            # 【修正 3】這裡也要同步更新驗證方式
             scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
             creds_dict = dict(st.secrets["gcp_service_account"])
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
             
-            # 新式驗證寫法
             creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
             client = gspread.authorize(creds)
             
             sheet = client.open("Jutor_Learning_Data").sheet1
             
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            sheet.append_row([timestamp, grade, mode, question, full_response, image_link])
+            # 欄位順序：時間 | 年級 | 模式 | 題目描述(AI轉譯) | AI完整回答
+            sheet.append_row([timestamp, grade, mode, image_desc, full_response])
             return True
     except Exception as e:
         print(f"雲端存檔失敗: {e}")
@@ -190,7 +145,7 @@ if not st.session_state.is_solving:
             else:
                 mode = "verbal" if start_verbal else "math"
                 st.session_state.solve_mode = mode
-                loading_text = "Jutor 正在思考譬喻與講解..." if mode == "verbal" else "Jutor 正在列出純數學算式..."
+                loading_text = "Jutor 正在讀題並整理思路..."
                 
                 with st.spinner(loading_text):
                     try:
@@ -203,9 +158,20 @@ if not st.session_state.is_solving:
                         如果是課業問題，請繼續執行解題。
                         """
 
+                        # --- 新增：文字轉譯指令 ---
+                        transcription_instruction = f"""
+                        【隱藏任務：題目轉譯 (資料庫用)】
+                        在開始解題前，請先執行以下動作：
+                        1. 將使用者指定之題目（{question_target}）的文字完整辨識出來。
+                        2. 若題目包含圖形（幾何、函數圖），請用精確的數學語言描述（例如：「開口向上的拋物線，頂點在(0,0)」或「直角三角形ABC，角B為90度」）。
+                        3. 將這段描述包在 `===DESC===` 與 `===DESC_END===` 之間。
+                        """
+
                         if mode == "verbal":
                             prompt = f"""
                             {guardrail_instruction}
+                            {transcription_instruction}
+                            
                             角色：你是一位幽默、親切、很會講譬喻的數學家教「Jutor」。
                             學生年級：【{selected_grade}】。指定題目：【{question_target}】。
                             【核心風格：口語化教學】
@@ -213,18 +179,30 @@ if not st.session_state.is_solving:
                             2. **禁止說教**：語氣要像朋友。
                             3. **原子化步驟**：拆成小步驟。
                             【結構要求】
-                            每個步驟之間插入分隔符號： ===STEP===
+                            (描述區塊) ===DESC=== ... ===DESC_END===
+                            (解題區塊)
+                            第一步：用白話確認題目 ===STEP===
+                            第二步：解題思路 ===STEP===
+                            第三步：開始計算 ===STEP===
+                            ...
                             最後結構：本題答案 ===STEP=== 【驗收類題】(僅題目) ===STEP=== 【類題詳解】
                             """
                         else:
                             prompt = f"""
                             {guardrail_instruction}
+                            {transcription_instruction}
+
                             角色：你是一個純數學運算引擎。
                             學生年級：【{selected_grade}】。指定題目：【{question_target}】。
                             【核心風格：純算式模式】
                             1. **嚴禁冗長中文**。內容以 LaTeX 算式為主。
                             2. **原子化步驟**：每一個數學變換都要拆成獨立步驟。
                             3. 每一個步驟後插入分隔符號： ===STEP===
+                            【結構要求】
+                            (描述區塊) ===DESC=== ... ===DESC_END===
+                            (解題區塊)
+                            第一步：列出已知 ===STEP===
+                            ...
                             最後結構：本題答案 ===STEP=== 【驗收類題】(僅題目) ===STEP=== 【類題解答】
                             """
 
@@ -233,7 +211,21 @@ if not st.session_state.is_solving:
                         if "REFUSE_OFF_TOPIC" in response.text:
                             st.error("🙅‍♂️ 這個學校好像不會考喔！請上傳數學或理化相關的題目。")
                         else:
-                            raw_steps = response.text.split("===STEP===")
+                            # --- 關鍵：資料解析 (把描述跟步驟切開) ---
+                            full_text = response.text
+                            image_desc = "無描述"
+                            
+                            # 1. 抓取描述
+                            desc_match = re.search(r"===DESC===(.*?)===DESC_END===", full_text, re.DOTALL)
+                            if desc_match:
+                                image_desc = desc_match.group(1).strip()
+                                # 從顯示內容中移除描述區塊，不要讓學生看到
+                                display_text = full_text.replace(desc_match.group(0), "").strip()
+                            else:
+                                display_text = full_text
+
+                            # 2. 切割步驟
+                            raw_steps = display_text.split("===STEP===")
                             st.session_state.solution_steps = [step.strip() for step in raw_steps if step.strip()]
                             st.session_state.step_index = 0
                             st.session_state.is_solving = True
@@ -242,9 +234,8 @@ if not st.session_state.is_solving:
                             st.session_state.qa_history = []
                             st.session_state.data_saved = False
 
-                            # 上傳與存檔
-                            image_link = upload_to_drive(uploaded_file, question_target)
-                            save_to_google_sheets(selected_grade, question_target, "指令教學" if mode=="verbal" else "純算式", response.text, image_link)
+                            # 3. 存檔 (存入 AI 轉譯後的文字描述)
+                            save_to_google_sheets(selected_grade, "指令教學" if mode=="verbal" else "純算式", image_desc, display_text)
                             
                             st.rerun()
 
