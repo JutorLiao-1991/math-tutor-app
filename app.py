@@ -13,7 +13,7 @@ st.markdown("同學你好！遇到不會的題目嗎？📸 **上傳照片**，�
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel('gemini-1.5-flash')
 except Exception as e:
     st.error("系統設定錯誤：找不到 API Key，請聯繫老師處理。")
     st.stop()
