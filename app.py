@@ -7,8 +7,9 @@ import streamlit.components.v1 as components
 import random
 import re
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-from googleapiclient.discovery import build # 用來操作 Google Drive
+# --- 【修正 1】改用現代的驗證套件 ---
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from datetime import datetime
 import io
@@ -45,20 +46,23 @@ def trigger_vibration():
     vibrate_js = """<script>if(navigator.vibrate){navigator.vibrate(30);}</script>"""
     components.html(vibrate_js, height=0, width=0)
 
-# --- 函數：上傳圖片到 Google Drive (新功能) ---
+# --- 函數：上傳圖片到 Google Drive ---
 def upload_to_drive(uploaded_file, question_text):
     try:
         if "gcp_service_account" not in st.secrets or "DRIVE_FOLDER_ID" not in st.secrets:
             return "未設定 Drive ID"
 
-        # 1. 驗證與連線
+        # 【修正 2】使用新的 Credentials 驗證方式
+        # scopes 參數名稱不同，要注意
         scope = ['https://www.googleapis.com/auth/drive']
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        
+        # 新式驗證寫法
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         service = build('drive', 'v3', credentials=creds)
 
-        # 2. 準備檔案
+        # 準備檔案
         file_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{question_text[:10]}.jpg"
         folder_id = st.secrets["DRIVE_FOLDER_ID"]
         
@@ -67,40 +71,37 @@ def upload_to_drive(uploaded_file, question_text):
             'parents': [folder_id]
         }
         
-        # 轉換檔案格式以供上傳
-        # 必須把指標歸零，不然上傳的會是空檔案
         uploaded_file.seek(0)
         media = MediaIoBaseUpload(uploaded_file, mimetype=uploaded_file.type)
 
-        # 3. 執行上傳
         file = service.files().create(
             body=file_metadata,
             media_body=media,
             fields='id, webViewLink'
         ).execute()
         
-        # 4. 回傳檔案的連結
         return file.get('webViewLink')
 
     except Exception as e:
         print(f"Drive 上傳失敗: {e}")
         return f"上傳失敗: {e}"
 
-# --- 函數：寫入 Google Sheets (新增 image_link 參數) ---
+# --- 函數：寫入 Google Sheets ---
 def save_to_google_sheets(grade, question, mode, full_response, image_link):
     try:
         if "gcp_service_account" in st.secrets:
+            # 【修正 3】這裡也要同步更新驗證方式
             scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
             creds_dict = dict(st.secrets["gcp_service_account"])
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
             
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+            # 新式驗證寫法
+            creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
             client = gspread.authorize(creds)
             
             sheet = client.open("Jutor_Learning_Data").sheet1
             
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            # 新增一欄：學生圖片連結
             sheet.append_row([timestamp, grade, mode, question, full_response, image_link])
             return True
     except Exception as e:
@@ -241,11 +242,8 @@ if not st.session_state.is_solving:
                             st.session_state.qa_history = []
                             st.session_state.data_saved = False
 
-                            # --- 背景任務：上傳圖片 + 存檔 Sheet ---
-                            # 1. 上傳圖片到 Drive 取得連結
+                            # 上傳與存檔
                             image_link = upload_to_drive(uploaded_file, question_target)
-                            
-                            # 2. 存入 Sheet (包含連結)
                             save_to_google_sheets(selected_grade, question_target, "指令教學" if mode=="verbal" else "純算式", response.text, image_link)
                             
                             st.rerun()
