@@ -3,3 +3,5 @@ google-generativeai>=0.8.3
 Pillow
 gspread
 oauth2client
+# 新增這行
+DRIVE_FOLDER_ID = "1S1kyOzCoITO2P8l149nQ-D0bFUyrJvKO"
