@@ -93,4 +93,39 @@ if uploaded_file is not None:
                         response = model.generate_content([prompt, image])
                         
                         # --- 處理回傳資料 ---
-                        raw_steps = response.text.split("
+                        raw_steps = response.text.split("===STEP===")
+                        st.session_state.solution_steps = [step.strip() for step in raw_steps if step.strip()]
+                        st.session_state.step_index = 0
+                        st.session_state.is_solving = True
+                        st.rerun()
+
+                    except Exception as e:
+                        st.error(f"連線錯誤：{e}")
+
+# --- 顯示解題步驟區 ---
+if st.session_state.is_solving and st.session_state.solution_steps:
+    st.markdown("---")
+    st.subheader("2️⃣ Jutor 老師教學中")
+    
+    # 顯示步驟 loop
+    for i in range(st.session_state.step_index + 1):
+        # 【修改處】這裡把 avatar 換成了刺蝟 emoji
+        with st.chat_message("assistant", avatar="🦔"):
+            st.markdown(st.session_state.solution_steps[i])
+
+    # --- 互動控制區 ---
+    total_steps = len(st.session_state.solution_steps)
+    
+    if st.session_state.step_index < total_steps - 1:
+        col_next, col_empty = st.columns([2, 3])
+        with col_next:
+            if st.button("✅ 我懂了，下一步！"):
+                st.session_state.step_index += 1
+                st.rerun()
+    else:
+        st.success("🎉 恭喜你完成這題了！快試試看上面的類題吧！")
+        if st.button("🔄 重新問別題 (清除畫面)"):
+            st.session_state.is_solving = False
+            st.session_state.solution_steps = []
+            st.session_state.step_index = 0
+            st.rerun()
