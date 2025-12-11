@@ -33,7 +33,7 @@ st.sidebar.header("📋 學生資料設定")
 if os.path.exists("logo.png"):
     st.sidebar.image("logo.png", use_column_width=True)
 
-st.sidebar.write("請選擇你的年級，Jutor 會用適合你的方式講解喔！")
+st.sidebar.write("請選擇你的年級，AI Jutor 會用適合你的方式講解喔！")
 selected_grade = st.sidebar.selectbox(
     "選擇年級：",
     ("國一", "國二", "國三", "高一", "高二", "高三")
