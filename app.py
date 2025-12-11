@@ -4,10 +4,11 @@ from PIL import Image
 import os
 import time
 import streamlit.components.v1 as components
-import pandas as pd
-from datetime import datetime
 import random
-import re # 用來抓取錯誤訊息中的等待秒數
+import re
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
 
 # --- 頁面設定 ---
 st.set_page_config(page_title="鳩特數理ＡＩ小幫手", page_icon="🦔", layout="centered")
@@ -27,10 +28,8 @@ if 'qa_history' not in st.session_state:
     st.session_state.qa_history = []
 if 'solve_mode' not in st.session_state:
     st.session_state.solve_mode = "verbal"
-if 'data_saved' not in st.session_state:
+if 'data_saved' not in st.session_state: # 避免重複存檔
     st.session_state.data_saved = False
-if 'daily_records' not in st.session_state:
-    st.session_state.daily_records = []
 
 # --- 函數：打字機效果 ---
 def stream_text(text):
@@ -43,56 +42,65 @@ def trigger_vibration():
     vibrate_js = """<script>if(navigator.vibrate){navigator.vibrate(30);}</script>"""
     components.html(vibrate_js, height=0, width=0)
 
-# --- 核心函數：強大的 API 呼叫器 (含自動換鑰匙功能) ---
+# --- 函數：寫入 Google Sheets (使用您修好的 Secrets) ---
+def save_to_google_sheets(grade, question, mode, full_response):
+    try:
+        # 只有當 secrets 裡有 gcp_service_account 才執行
+        if "gcp_service_account" in st.secrets:
+            scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            # 處理 private_key 換行
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+            client = gspread.authorize(creds)
+            
+            # 請確保 Google Drive 裡有名為 "Jutor_Learning_Data" 的試算表，且已共用給機器人 Email
+            sheet = client.open("Jutor_Learning_Data").sheet1
+            
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            sheet.append_row([timestamp, grade, mode, question, full_response])
+            return True
+    except Exception as e:
+        print(f"雲端存檔失敗 (不影響前端): {e}")
+        return False
+
+# --- 函數：API 呼叫與負載平衡 ---
 def call_gemini_with_rotation(prompt_content, image_input=None):
-    # 1. 取得所有鑰匙
     try:
         keys = st.secrets["API_KEYS"]
-        if isinstance(keys, str): # 相容舊設定 (如果只填了一行字串)
-            keys = [keys]
+        if isinstance(keys, str): keys = [keys]
     except:
-        st.error("系統錯誤：找不到 API_KEYS 設定，請檢查 Secrets。")
+        st.error("系統錯誤：請檢查 Secrets 中的 API_KEYS 設定。")
         st.stop()
 
-    # 2. 隨機打亂鑰匙順序 (負載平衡)
-    # 這樣大家不會都擠在第一把鑰匙
     shuffled_keys = keys.copy()
     random.shuffle(shuffled_keys)
     
     last_error = None
     
-    # 3. 嘗試迴圈
     for key in shuffled_keys:
         try:
-            # 設定目前的鑰匙
             genai.configure(api_key=key)
             model = genai.GenerativeModel('models/gemini-2.5-flash')
             
-            # 發送請求 (判斷有沒有圖片)
             if image_input:
                 response = model.generate_content([prompt_content, image_input])
             else:
-                # 這是給問答模式用的 (純文字 history)
-                # 注意：Gemini 的 chat session 需要特殊的換鑰匙處理，這裡簡化為直接調用
-                # 如果是多輪對話，換 Key 可能會導致上下文遺失，
-                # 但為了救急 429 錯誤，我們這邊採用單次生成或需重建 history
-                # 這裡為了簡化，若是 QA 模式建議使用 generate_content 帶入完整 history text
                 response = model.generate_content(prompt_content)
                 
-            return response # 成功就直接回傳，結束迴圈
+            return response
 
         except Exception as e:
             error_str = str(e)
-            # 如果是 429 (Quota Exceeded) 或 503 (Server Busy)，就換下一把鑰匙
+            # 偵測 429 或 503 錯誤
             if "429" in error_str or "Quota exceeded" in error_str or "503" in error_str:
-                print(f"Key ...{key[-4:]} 額度已滿，切換下一把...") # 後台紀錄
                 last_error = e
-                continue # 繼續迴圈，試下一把
+                continue # 換下一把鑰匙
             else:
-                # 如果是其他嚴重錯誤 (如 400 參數錯誤)，直接報錯，不用換鑰匙試了
-                raise e
+                raise e # 其他錯誤直接拋出
     
-    # 4. 如果所有鑰匙都試過了還是失敗
+    # 如果所有鑰匙都失敗，這裡會拋出最後一個錯誤，讓外層去捕捉並顯示「喝口水」訊息
     raise last_error
 
 # ================= 介面設計 =================
@@ -106,25 +114,12 @@ with col1:
 with col2:
     st.title("鳩特數理ＡＩ小幫手")
 
-# --- 老師後台 ---
-with st.expander("👨‍🏫 老師後台 (下載今日紀錄)"):
-    st.write(f"目前已累積 **{len(st.session_state.daily_records)}** 筆紀錄")
-    if len(st.session_state.daily_records) > 0:
-        df = pd.DataFrame(st.session_state.daily_records)
-        csv = df.to_csv(index=False).encode('utf-8-sig')
-        st.download_button(
-            label="📥 下載 CSV",
-            data=csv,
-            file_name=f"jutor_history_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-        )
-
 # --- 年級 ---
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
 with col_grade_label:
     st.markdown("### 📋 請先選擇年級：")
-    st.caption("Jutor 會依此調整難度。")
+    st.caption("Jutor 會依此調整講解口吻。")
 with col_grade_select:
     selected_grade = st.selectbox(
         "年級選單",
@@ -147,7 +142,7 @@ if not st.session_state.is_solving:
         st.markdown("### 🚀 選擇解題模式：")
         col_btn_verbal, col_btn_math = st.columns(2)
         with col_btn_verbal:
-            start_verbal = st.button("🗣️ Jutor 指令教學", use_container_width=True, type="primary")
+            start_verbal = st.button("🗣️ Jutor 口語教學", use_container_width=True, type="primary")
         with col_btn_math:
             start_math = st.button("🔢 純算式解法", use_container_width=True)
 
@@ -157,81 +152,105 @@ if not st.session_state.is_solving:
             else:
                 mode = "verbal" if start_verbal else "math"
                 st.session_state.solve_mode = mode
-                loading_text = "Jutor 正在進行原子化指令拆解..." if mode == "verbal" else "Jutor 正在列出純數學算式..."
+                
+                loading_text = "Jutor 正在思考譬喻與講解..." if mode == "verbal" else "Jutor 正在列出純數學算式..."
                 
                 with st.spinner(loading_text):
                     try:
-                        # Prompt 設定
+                        # --- Prompt 設計 ---
+                        # 共通的防護網指令
+                        guardrail_instruction = """
+                        【最高防護指令：非課業過濾】
+                        請先檢查圖片內容與使用者問題。
+                        如果這完全不是數學、理化或學校課業相關的問題（例如：自拍、風景照、純聊天、問天氣），
+                        請**務必**只回傳這行代碼，不要多說任何字： REFUSE_OFF_TOPIC
+                        如果是課業問題，請繼續執行解題。
+                        """
+
                         if mode == "verbal":
+                            # 模式一：恢復成「中文講解多、口語化、譬喻」
                             prompt = f"""
-                            角色：你是一位精簡、直接、口令化的數學家教「Jutor」。
+                            {guardrail_instruction}
+                            角色：你是一位幽默、親切、很會講譬喻的數學家教「Jutor」。
                             學生年級：【{selected_grade}】。指定題目：【{question_target}】。
-                            【最高指令 1：極簡口令風格】嚴禁廢話。使用祈使句直接下指令。
-                            【最高指令 2：原子化步驟拆解】每一個小動作之後，必須插入分隔符號： ===STEP===
-                            【最高指令 3：幾何題處理】若遇幾何題，請用「精準文字指令」代替作圖。
-                            【最高指令 4：結尾結構】解題結束後，依照順序：本題最終答案 ===STEP=== 【驗收類題】(數字不同但邏輯相同，不附答案) ===STEP=== 【類題詳解】
+
+                            【核心風格：口語化教學】
+                            1. **白話解釋**：把數學觀念變成生活例子。例如：不要只說「分配律」，要說「括號外面的人跟裡面每個人握手」。
+                            2. **禁止說教**：語氣要像朋友，多用「我們來試試看」、「你看喔」。
+                            3. **原子化步驟**：雖然是口語，但還是要拆成小步驟，讓學生一步一步跟上。
+
+                            【結構要求】
+                            每個步驟之間插入分隔符號： ===STEP===
+                            1. 第一步：用白話確認題目 ===STEP===
+                            2. 第二步：解題思路（用譬喻法） ===STEP===
+                            3. 第三步開始：逐步計算與講解 ===STEP===
+                            ...
+                            最後結構：本題答案 ===STEP=== 【驗收類題】(僅題目) ===STEP=== 【類題詳解】
                             """
                         else:
+                            # 模式二：純算式 (保持不變)
                             prompt = f"""
+                            {guardrail_instruction}
                             角色：你是一個純數學運算引擎。
                             學生年級：【{selected_grade}】。指定題目：【{question_target}】。
-                            【最高指令 1：純算式模式】嚴禁冗長中文。以 LaTeX 為主。
-                            【最高指令 2：原子化步驟拆解】每一個算式變換後，必須插入分隔符號： ===STEP===
-                            【最高指令 3：結尾結構】解題結束後，依照順序：本題最終答案 ===STEP=== 【驗收類題】(僅題目) ===STEP=== 【類題解答】
+
+                            【核心風格：純算式模式】
+                            1. **嚴禁冗長中文**。內容以 LaTeX 算式為主。
+                            2. **原子化步驟**：每一個數學變換（移項、通分）都要拆成獨立步驟。
+                            3. 每一個步驟後插入分隔符號： ===STEP===
+
+                            最後結構：本題答案 ===STEP=== 【驗收類題】(僅題目) ===STEP=== 【類題解答】
                             """
 
-                        # --- 改成呼叫我們的「自動換鑰匙」函數 ---
+                        # 呼叫 API
                         response = call_gemini_with_rotation(prompt, image)
                         
-                        raw_steps = response.text.split("===STEP===")
-                        st.session_state.solution_steps = [step.strip() for step in raw_steps if step.strip()]
-                        st.session_state.step_index = 0
-                        st.session_state.is_solving = True
-                        st.session_state.streaming_done = False
-                        st.session_state.in_qa_mode = False
-                        st.session_state.qa_history = []
-                        st.session_state.data_saved = False
+                        # --- 檢查是否被防護網攔截 ---
+                        if "REFUSE_OFF_TOPIC" in response.text:
+                            st.error("🙅‍♂️ 這個學校好像不會考喔！請上傳數學或理化相關的題目。")
+                        else:
+                            # 正常解題流程
+                            raw_steps = response.text.split("===STEP===")
+                            st.session_state.solution_steps = [step.strip() for step in raw_steps if step.strip()]
+                            st.session_state.step_index = 0
+                            st.session_state.is_solving = True
+                            st.session_state.streaming_done = False
+                            st.session_state.in_qa_mode = False
+                            st.session_state.qa_history = []
+                            st.session_state.data_saved = False
 
-                        # 紀錄
-                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        mode_str = "指令教學" if mode == "verbal" else "純算式"
-                        new_record = {
-                            "時間": timestamp,
-                            "年級": selected_grade,
-                            "模式": mode_str,
-                            "題目描述": question_target,
-                            "AI完整詳解": response.text
-                        }
-                        st.session_state.daily_records.append(new_record)
-                        
-                        st.rerun()
+                            # 背景存檔 (Google Sheets)
+                            save_to_google_sheets(selected_grade, question_target, "指令教學" if mode=="verbal" else "純算式", response.text)
+                            
+                            st.rerun()
 
                     except Exception as e:
-                        # --- 【關鍵修改】友善的錯誤攔截 ---
+                        # --- 客製化過載錯誤訊息 ---
                         error_msg = str(e)
                         if "429" in error_msg or "Quota exceeded" in error_msg:
-                            # 嘗試抓取等待時間
-                            wait_time = "60" # 預設一分鐘
+                            wait_time = "60"
                             match = re.search(r"retry in (\d+(\.\d+)?)", error_msg)
                             if match:
-                                wait_time = str(int(float(match.group(1))) + 5) # 無條件進位並多加5秒緩衝
+                                wait_time = str(int(float(match.group(1))) + 5)
                             
-                            st.warning(f"🐢 Jutor 老師目前處理太多學生的問題，正在喝口水休息...")
-                            st.error(f"⚠️ 系統過載保護中，請稍候 {wait_time} 秒後再試一次！")
+                            st.warning(f"🥵 太多人問問題了，鳩特老師需要喝口水...")
+                            st.error(f"請等待 {wait_time} 秒後再試一次！(系統正在讓老師休息)")
                         else:
-                            st.error(f"連線發生非預期錯誤：{e}")
+                            st.error(f"連線發生錯誤：{e}")
 
-# ================= 解題互動 (部分微調以支援 QA 的換鑰匙) =================
+# ================= 解題互動主流程 =================
 
 if st.session_state.is_solving and st.session_state.solution_steps:
     
-    header_text = "📝 Jutor 口令教學中" if st.session_state.solve_mode == "verbal" else "🔢 純算式推導中"
+    header_text = "🗣️ Jutor 口語教學中" if st.session_state.solve_mode == "verbal" else "🔢 純算式推導中"
     st.subheader(header_text)
     
+    # 顯示舊步驟
     for i in range(st.session_state.step_index):
         with st.chat_message("assistant", avatar="🦔"):
             st.markdown(st.session_state.solution_steps[i])
             
+    # 顯示當前步驟
     current_step_text = st.session_state.solution_steps[st.session_state.step_index]
     with st.chat_message("assistant", avatar="🦔"):
         if not st.session_state.streaming_done:
@@ -241,22 +260,26 @@ if st.session_state.is_solving and st.session_state.solution_steps:
         else:
             st.markdown(current_step_text)
 
+    # --- 控制按鈕區 (三鍵鼎立) ---
     total_steps = len(st.session_state.solution_steps)
     if st.session_state.step_index < total_steps - 1:
+        
         if not st.session_state.in_qa_mode:
             st.markdown("---")
-            col_next, col_ask = st.columns([3, 2])
+            # 使用三欄位佈局：[上一步] [發問] [下一步]
+            col_back, col_ask, col_next = st.columns([1, 1, 2])
             
-            btn_label = "✅ 我懂了，下一步！"
-            if st.session_state.step_index == total_steps - 2:
-                btn_label = "👀 核對類題答案"
-            
-            with col_next:
-                def next_step():
-                    st.session_state.step_index += 1
-                    st.session_state.streaming_done = False
-                st.button(btn_label, on_click=next_step, use_container_width=True, type="primary")
-            
+            # 1. 上一步按鈕 (新增)
+            with col_back:
+                def prev_step():
+                    if st.session_state.step_index > 0:
+                        st.session_state.step_index -= 1
+                        st.session_state.streaming_done = True # 回去看舊的不需要打字特效
+                
+                # 如果是第一步，禁用上一步按鈕
+                st.button("⬅️ 上一步", on_click=prev_step, disabled=(st.session_state.step_index == 0), use_container_width=True)
+
+            # 2. 提問按鈕 (插播)
             with col_ask:
                 def enter_qa_mode():
                     st.session_state.in_qa_mode = True
@@ -264,15 +287,26 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                     if st.session_state.solve_mode == "math":
                         context_prompt += "目前是【純算式模式】，但學生看不懂這一步，請解釋。"
                     st.session_state.qa_history = [
-                        {"role": "user", "parts": [context_prompt]}, # 修正：將背景設定偽裝成第一則 user prompt
-                        {"role": "model", "parts": ["了解，請說出你的問題。"]} # 假裝 AI 已經收到
+                        {"role": "user", "parts": [context_prompt]},
+                        {"role": "model", "parts": ["了解，請說出你的問題。"]}
                     ]
-                st.button("🤔 不太懂，我想問...", on_click=enter_qa_mode, use_container_width=True)
+                st.button("🤔 我想問...", on_click=enter_qa_mode, use_container_width=True)
+
+            # 3. 下一步按鈕
+            with col_next:
+                btn_label = "✅ 我懂了，下一步！"
+                if st.session_state.step_index == total_steps - 2:
+                    btn_label = "👀 核對類題答案"
+                
+                def next_step():
+                    st.session_state.step_index += 1
+                    st.session_state.streaming_done = False
+                st.button(btn_label, on_click=next_step, use_container_width=True, type="primary")
 
         else:
+            # --- 問答模式 (保持不變) ---
             with st.container(border=True):
                 st.markdown("#### 💡 提問時間")
-                # 顯示歷史對話 (跳過前兩則背景設定)
                 for msg in st.session_state.qa_history[2:]:
                      with st.chat_message("user" if msg["role"] == "user" else "assistant", avatar="👤" if msg["role"] == "user" else "🦔"):
                          st.markdown(msg["parts"][0])
@@ -286,22 +320,17 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                     with st.chat_message("assistant", avatar="🦔"):
                         with st.spinner("思考中..."):
                             try:
-                                # 這裡我們需要把整個 history 轉成文字串，讓換鑰匙函數可以吃
-                                # 這是為了避免換 Key 後 session 失效的權宜之計
                                 full_prompt_text = "以下是對話歷史：\n"
                                 for h in st.session_state.qa_history:
                                     role = "學生" if h["role"] == "user" else "Jutor"
                                     full_prompt_text += f"{role}: {h['parts'][0]}\n"
                                 full_prompt_text += f"學生最新問題: {user_question}\n請回答學生的問題。"
                                 
-                                # 使用自動換鑰匙函數
                                 response = call_gemini_with_rotation(full_prompt_text)
-                                
                                 st.write_stream(stream_text(response.text))
                                 st.session_state.qa_history.append({"role": "model", "parts": [response.text]})
                             except Exception as e:
-                                st.error(f"連線忙碌中，請重試。")
-
+                                st.error("連線忙碌，請稍後再試。")
                     st.rerun()
 
                 def exit_qa_mode():
@@ -310,12 +339,24 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.button("👌 回到主流程", on_click=exit_qa_mode, use_container_width=True)
 
     else:
+        # --- 結尾畫面 ---
         st.markdown("---")
         st.success("🎉 恭喜完成本題學習！")
-        if st.button("🔄 重新問別題", use_container_width=True):
-            st.session_state.is_solving = False
-            st.session_state.solution_steps = []
-            st.session_state.step_index = 0
-            st.session_state.streaming_done = False
-            st.session_state.in_qa_mode = False
-            st.rerun()
+        
+        # 結尾還是給一個上一步，怕學生不小心按太快錯過答案
+        col_end_back, col_end_reset = st.columns([1, 2])
+        with col_end_back:
+            def prev_step_end():
+                st.session_state.step_index -= 1
+                st.session_state.streaming_done = True
+            st.button("⬅️ 上一步", on_click=prev_step_end, use_container_width=True)
+            
+        with col_end_reset:
+            if st.button("🔄 重新問別題", use_container_width=True):
+                st.session_state.is_solving = False
+                st.session_state.solution_steps = []
+                st.session_state.step_index = 0
+                st.session_state.streaming_done = False
+                st.session_state.in_qa_mode = False
+                st.session_state.data_saved = False
+                st.rerun()
