@@ -89,7 +89,7 @@ else:
 assistant_avatar = "🦔" 
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v6.3", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v6.4", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 CORRECT_FONT_NAME = configure_chinese_font()
 
@@ -97,7 +97,7 @@ CORRECT_FONT_NAME = configure_chinese_font()
 if 'step_index' not in st.session_state: st.session_state.step_index = 0
 if 'solution_steps' not in st.session_state: st.session_state.solution_steps = []
 if 'is_solving' not in st.session_state: st.session_state.is_solving = False
-if 'streaming_done' not in st.session_state: st.session_state.streaming_done = False
+if 'streaming_done' not in st.session_state: st.session_state.streaming_done = False # 雖然移除特效，但保留此變數以防萬一
 if 'in_qa_mode' not in st.session_state: st.session_state.in_qa_mode = False
 if 'qa_history' not in st.session_state: st.session_state.qa_history = []
 if 'solve_mode' not in st.session_state: st.session_state.solve_mode = "verbal"
@@ -108,11 +108,6 @@ if 'trigger_rescue' not in st.session_state: st.session_state.trigger_rescue = F
 if 'used_key_suffix' not in st.session_state: st.session_state.used_key_suffix = "" 
 
 # --- 函數區 ---
-def stream_text(text):
-    for char in text:
-        yield char
-        time.sleep(0.01)
-
 def trigger_vibration():
     vibrate_js = """<script>if(navigator.vibrate){navigator.vibrate(30);}</script>"""
     components.html(vibrate_js, height=0, width=0)
@@ -137,11 +132,11 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 【重砲修正】排版強制整形 ---
+# --- 【重砲修正 v2】排版強制整形 ---
 def clean_output_format(text):
     if not text: return text
     
-    # 1. Block Math 轉 Inline Math
+    # 1. Block Math 轉 Inline Math (避免 $$x$$ 造成換行)
     def block_to_inline(match):
         content = match.group(1)
         if len(content) < 40 and '\\\\' not in content and 'align' not in content:
@@ -149,17 +144,23 @@ def clean_output_format(text):
         return match.group(0)
     text = re.sub(r'\$\$([\s\S]*?)\$\$', block_to_inline, text)
 
-    # 2. 括號縫合
+    # 2. 括號縫合 (如 ( \n 289 \n ))
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
 
-    # 3. 三明治強力膠 v2
-    cjk = r'[\u4e00-\u9fa5]'
-    short_content = r'(?:(?!\n|•|- |\* ).){1,25}'
-    for _ in range(2):
-        pattern = f'({cjk})\s*\\n+\s*({short_content})\s*\\n+\s*({cjk}|[，。！？：,.?])'
-        text = re.sub(pattern, r'\1 \2 \3', text)
+    # 3. 三明治強力膠 v3 (針對截圖中的頑固換行)
+    # 邏輯：只要是 "換行 -> 短內容 -> 換行"，前後不管接什麼，都先把換行殺掉
+    # 這能解決 "數字：" 後面接換行，或是 "數字" 後面接 "," 的情況
+    
+    # 為了安全，我們分兩步走：
+    # 3a. 先處理前面的換行： [非換行字元] \n [短內容]
+    # (?<=\S) 表示前面必須有非空白字元
+    short_content = r'(?:(?!\n|•|- |\* ).){1,25}' 
+    text = re.sub(f'(?<=\\S)\\s*\\n\\s*({short_content})(?=\\s)', r' \1', text)
+    
+    # 3b. 再處理後面的換行： [短內容] \n [非換行字元]
+    text = re.sub(f'({short_content})\\s*\\n\\s*(?=\\S)', r'\1 ', text)
 
-    # 4. 標點黏合
+    # 4. 標點黏合 (再次確保)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
 
     return text
@@ -211,7 +212,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理 AI 夥伴")
-    st.caption("Jutor AI 教學系統 v6.3 (類題優化版 19:15)")
+    st.caption("Jutor AI 教學系統 v6.4 (穩定修復版 19:45)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -267,11 +268,10 @@ if not st.session_state.is_solving:
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
                         
                         formatting = """
-                        【排版嚴格指令 - 關於數值與變數】
-                        1. **絕對禁止**將純數字(如 288, -34)、變數(如 x, y)或極短的式子(如 a=1)獨立成一行。
-                        2. 這些數值**必須**跟隨在前後文字之間 (Inline Mode)。
-                        3. 單純數值或變數，請直接書寫或使用 `$x$` (一個錢字號)，**嚴禁**使用 `$$x$$` (兩個錢字號)，因為那會強制換行。
-                        4. 只有在「多行計算過程」時，才使用 `$$ ... $$` 或 `aligned` 環境進行換行對齊。
+                        【排版嚴格指令】
+                        1. **數值與變數不換行**：純數字(如 288, -34)、變數(如 x, y)、短式子(如 a=1)必須使用行內格式(Inline)，**嚴禁換行**。
+                        2. **符號使用**：使用 `$x$` (一個錢字號)，不要用 `$$x$$`。
+                        3. **直式計算**：只有在長算式推導時，才使用換行對齊。
                         """
                         
                         plotting = """
@@ -279,8 +279,7 @@ if not st.session_state.is_solving:
                         1. 只有當題目明確涉及「函數圖形」、「幾何座標」、「統計圖表」時，才生成 Python 程式碼 (matplotlib)。若為純代數運算，請勿繪圖，不要輸出 ===PLOT=== 區塊。
                         2. 程式碼必須能直接執行，並包在 `===PLOT===` 與 `===PLOT_END===` 之間。
                         3. 圖表標題、座標軸請使用中文。
-                        4. ⚠️ 嚴格 LaTeX 規範：Python 字串請用 raw string (r'...')。分數務必寫成 r'$\frac{a}{b}$' (必加括號)，禁止使用 \frac a b 這種簡寫。
-                        5. ⚠️ 座標軸檢核：若使用 plt.xticks 或 set_ticks 自訂刻度，務必確保 ticks 列表與 labels 列表的長度完全一致，否則禁止設定。
+                        4. ⚠️ 嚴格 LaTeX 規範：Python 字串請用 raw string (r'...')。分數務必寫成 r'$\frac{a}{b}$' (必加括號)。
                         """
 
                         common_role = f"角色：你是 Jutor。年級：{selected_grade}。題目：{question_target}。"
@@ -289,9 +288,7 @@ if not st.session_state.is_solving:
                         else:
                             style = "風格：純算式、LaTeX、極簡。"
 
-                        # --- 修正重點：類題流程控制 ---
-                        # 確保「驗收類題標題」與「題目內容」在同一個 STEP
-                        # 確保「類題答案」在下一個 STEP
+                        # --- 修正：類題只給答案 ---
                         prompt = f"""
                         {guardrail}
                         {transcription}
@@ -312,7 +309,7 @@ if not st.session_state.is_solving:
                         (請在此處直接出題，讓標題與題目在同一個區塊顯示，不要用STEP分隔)
                         ===STEP=== 
                         🗝️ 類題答案
-                        (請在此處提供答案)
+                        (請「僅提供」最終數值或答案選項，不要顯示任何計算過程或詳解)
                         """
 
                         response, key_suffix = call_gemini_with_rotation(prompt, image, use_pro=use_pro)
@@ -377,12 +374,9 @@ if st.session_state.is_solving and st.session_state.solution_steps:
             
     current_step_text = st.session_state.solution_steps[st.session_state.step_index]
     with st.chat_message("assistant", avatar=assistant_avatar):
-        if not st.session_state.streaming_done:
-            trigger_vibration()
-            st.write_stream(stream_text(current_step_text))
-            st.session_state.streaming_done = True
-        else:
-            st.markdown(current_step_text)
+        # --- 修正：移除打字機效果，直接顯示以避免灰色閃爍 ---
+        trigger_vibration()
+        st.markdown(current_step_text)
 
     total_steps = len(st.session_state.solution_steps)
     
@@ -395,7 +389,6 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 def prev_step():
                     if st.session_state.step_index > 0:
                         st.session_state.step_index -= 1
-                        st.session_state.streaming_done = True 
                 st.button("⬅️ 上一步", on_click=prev_step, disabled=(st.session_state.step_index == 0), use_container_width=True)
 
             with col_ask:
@@ -407,14 +400,11 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.button("🤔 我想問...", on_click=enter_qa_mode, use_container_width=True)
 
             with col_next:
-                # --- 流程控制核心 ---
-                # 如果只剩最後一步，代表下一步是「類題答案」，所以按鈕要變成核對答案
                 btn_label = "✅ 我懂了，下一步！"
                 if st.session_state.step_index == total_steps - 2: btn_label = "👀 核對類題答案"
                 
                 def next_step():
                     st.session_state.step_index += 1
-                    st.session_state.streaming_done = False
                 st.button(btn_label, on_click=next_step, use_container_width=True, type="primary")
 
         else:
@@ -439,7 +429,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                             try:
                                 full_prompt = "對話紀錄:\n" + "\n".join([f"{h['role']}:{h['parts'][0]}" for h in st.session_state.qa_history]) + f"\n新問題:{user_question}"
                                 response, _ = call_gemini_with_rotation(full_prompt, use_pro=st.session_state.use_pro_model)
-                                st.write_stream(stream_text(response.text))
+                                st.markdown(response.text) # 這裡也移除打字機
                                 st.session_state.qa_history.append({"role": "model", "parts": [response.text]})
                             except: st.error("忙碌中")
                     st.rerun()
@@ -455,14 +445,12 @@ if st.session_state.is_solving and st.session_state.solution_steps:
         with col_end_back:
             def prev_step_end():
                 st.session_state.step_index -= 1
-                st.session_state.streaming_done = True
             st.button("⬅️ 上一步", on_click=prev_step_end, use_container_width=True)
         with col_end_reset:
             if st.button("🔄 重新問別題", use_container_width=True):
                 st.session_state.is_solving = False
                 st.session_state.solution_steps = []
                 st.session_state.step_index = 0
-                st.session_state.streaming_done = False
                 st.session_state.in_qa_mode = False
                 st.session_state.data_saved = False
                 st.session_state.plot_code = None
