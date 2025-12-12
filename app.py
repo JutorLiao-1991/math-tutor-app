@@ -73,7 +73,7 @@ else:
 assistant_avatar = "🦔" 
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v5.1", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v5.2", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 
 # --- 啟動時執行字型設定 ---
@@ -195,7 +195,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理 AI 夥伴")
-    st.caption("Jutor AI 教學系統 v5.1 (Powered by Gemini 2.5)")
+    st.caption("Jutor AI 教學系統 v5.2 (Powered by Gemini 2.5)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -331,10 +331,11 @@ if st.session_state.is_solving and st.session_state.solution_steps:
     
     header_text = "🗣️ Jutor 口語教學中" if st.session_state.solve_mode == "verbal" else "🔢 純算式推導中"
     
+    # --- 修正 1：移除 Flash 的括號顯示，只保留 Pro 標記 ---
     if st.session_state.use_pro_model:
         st.markdown(f"### {header_text} (🔥 2.5 Pro 救援)")
     else:
-        st.markdown(f"### {header_text} (⚡ 2.5 Flash)")
+        st.markdown(f"### {header_text}") # 這裡已經移除 (⚡ 2.5 Flash)
     
     if st.session_state.plot_code:
         with st.expander("📊 查看幾何/函數圖形 (AI 繪製)", expanded=True):
@@ -415,6 +416,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.button("👌 回到主流程", on_click=exit_qa_mode, use_container_width=True)
 
     else:
+        # --- 最終頁面 (顯示恭喜與重置) ---
         st.markdown("---")
         st.success("🎉 恭喜完成！")
         col_end_back, col_end_reset = st.columns([1, 2])
@@ -435,14 +437,15 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.session_state.use_pro_model = False
                 st.rerun()
 
-    if not st.session_state.use_pro_model and not st.session_state.in_qa_mode:
-        st.markdown("")
-        st.markdown("")
-        st.markdown("---")
-        warn_col1, warn_col2 = st.columns([2, 1])
-        with warn_col2:
-             if st.button("🚨 答案有錯！請 Jutor Pro 支援", use_container_width=True):
-                 st.session_state.trigger_rescue = True
-                 st.toast("正在召喚 Jutor Pro (2.5) 專家...", icon="🔥")
-                 time.sleep(1)
-                 st.rerun()
+        # --- 修正 2：救援按鈕移到這裡 (只有在看完最後一頁時才出現) ---
+        if not st.session_state.use_pro_model:
+            st.markdown("")
+            st.markdown("")
+            st.markdown("---")
+            warn_col1, warn_col2 = st.columns([2, 1])
+            with warn_col2:
+                 if st.button("🚨 答案有錯！請 Jutor Pro 支援", use_container_width=True):
+                     st.session_state.trigger_rescue = True
+                     st.toast("正在召喚 Jutor Pro (2.5) 專家...", icon="🔥")
+                     time.sleep(1)
+                     st.rerun()
