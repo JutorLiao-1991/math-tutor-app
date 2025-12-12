@@ -196,7 +196,8 @@ with col1:
 
 with col2:
     st.title("鳩特數理 AI 夥伴")
-    st.caption("Jutor AI 教學系統 v5.3 (Powered by Gemini 2.5)")
+    # --- 更新時間戳記 (含時間) ---
+    st.caption("Jutor AI 教學系統 v5.3 (更新時間: 2025/12/12 17:03)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
