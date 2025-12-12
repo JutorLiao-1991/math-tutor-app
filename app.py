@@ -13,23 +13,42 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import numpy as np
 
-# --- 注入自定義 CSS ---
+# --- 注入自定義 CSS (含手機版字體優化) ---
 def inject_custom_css():
     st.markdown(
         """
         <style>
+        /* 全域字體設定 */
         .katex-html { overflow-x: auto; overflow-y: hidden; max-width: 100%; display: block; padding-bottom: 5px; }
         .stMarkdown { max-width: 100%; overflow-wrap: break-word; }
+        
+        /* 頭像樣式 */
         .stChatMessage .stChatMessageAvatar {
             width: 2.8rem;
             height: 2.8rem;
             background-color: #f0f2f6; 
             border-radius: 50%;
             object-fit: cover;
-            font-size: 1.8rem; /* 調整 Emoji 大小 */
+            font-size: 1.8rem;
             display: flex;
             align-items: center;
             justify-content: center;
+        }
+
+        /* --- 手機版 RWD 優化 (針對寬度小於 600px 的裝置) --- */
+        @media only screen and (max-width: 600px) {
+            /* 縮小內文文字，接近 Gemini 原生體驗 */
+            .stMarkdown p, .stMarkdown li, .stMarkdown div, .stChatMessage p {
+                font-size: 15px !important;
+                line-height: 1.6 !important;
+            }
+            /* 縮小標題 */
+            h1 { font-size: 1.6rem !important; }
+            h2 { font-size: 1.4rem !important; }
+            h3 { font-size: 1.2rem !important; }
+            
+            /* 讓數學式 (LaTeX) 在手機上不要太大 */
+            .katex { font-size: 1.1em !important; }
         }
         </style>
         """,
@@ -73,7 +92,6 @@ def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
         client = get_google_sheet_client()
         if client:
             sheet = client.open("Jutor_Learning_Data").sheet1
-            # 這裡存的是 Server 時間 (通常是 UTC)
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             sheet.append_row([timestamp, grade, mode, image_desc, full_response, key_info])
             return True
@@ -90,7 +108,7 @@ else:
 assistant_avatar = "🦔" 
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v6.6", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v6.7", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 CORRECT_FONT_NAME = configure_chinese_font()
 
@@ -133,24 +151,35 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 【重砲修正 v2】排版強制整形 ---
+# --- 【強力排版修復 v3】針對三明治斷行與多選題 ---
 def clean_output_format(text):
     if not text: return text
     
+    # 1. 暴力降維: $$...$$ -> $...$ (除非長度很長)
     def block_to_inline(match):
         content = match.group(1)
-        if len(content) < 40 and '\\\\' not in content and 'align' not in content:
+        if len(content) < 50 and '\\\\' not in content and 'align' not in content:
             return f"${content.strip()}$"
         return match.group(0)
     text = re.sub(r'\$\$([\s\S]*?)\$\$', block_to_inline, text)
 
+    # 2. 括號與標點修復
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
-
-    short_content = r'(?:(?!\n|•|- |\* ).){1,25}' 
-    text = re.sub(f'(?<=\\S)\\s*\\n\\s*({short_content})(?=\\s)', r' \1', text)
-    text = re.sub(f'({short_content})\\s*\\n\\s*(?=\\S)', r'\1 ', text)
-
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
+
+    # 3. 【中文黏合劑】
+    # 這是最強力的一招：只要看到 "中文 \n 短內容 \n 中文"，就強制殺掉換行
+    # 短內容包含：數字、變數、短 LaTeX
+    
+    cjk = r'[\u4e00-\u9fa5]'
+    # 短內容: 非換行字元，長度 1~30
+    short_content = r'(?:(?!\n|•|- |\* ).){1,30}' 
+    
+    # 前後都是中文/標點，中間夾著換行與短內容 -> 黏起來
+    # 執行兩次確保連續斷行被修復
+    for _ in range(2):
+        pattern = f'(?<={cjk})\s*\\n+\s*({short_content})\s*\\n+\s*(?={cjk}|[，。！？：,.?])'
+        text = re.sub(pattern, r' \1 ', text)
 
     return text
 
@@ -201,8 +230,8 @@ with col1:
 
 with col2:
     st.title("鳩特數理 AI 夥伴")
-    # --- 更新時間戳記 ---
-    st.caption("Jutor AI 教學系統 v6.6 (更新時間: 2025/12/12 19:55)")
+    # 更新時間戳記
+    st.caption("Jutor AI 教學系統 v6.7 (手機優化+多選支援 12/12)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -259,18 +288,18 @@ if not st.session_state.is_solving:
                         
                         formatting = """
                         【排版嚴格指令】
-                        1. **數值與變數不換行**：純數字(如 288, -34)、變數(如 x, y)、短式子(如 a=1)必須使用行內格式(Inline)，**嚴禁換行**。
-                        2. **符號使用**：使用 `$x$` (一個錢字號)，不要用 `$$x$$`。
+                        1. **數值與變數不換行**：純數字(如 288, -34)、變數(如 x, y)、短式子(如 a=1)必須使用行內格式(Inline)，**嚴禁換行**，必須與前後中文緊密相連。
+                        2. **列表控制**：除非是列舉不同選項，否則不要使用 Bullet Points 來顯示單一數值。
                         3. **直式計算**：只有在長算式推導時，才使用換行對齊。
                         """
                         
                         plotting = """
                         【繪圖能力啟動】
-                        1. 只有當題目明確涉及「函數圖形」、「幾何座標」、「統計圖表」時，才生成 Python 程式碼 (matplotlib)。若為純代數運算，請勿繪圖，不要輸出 ===PLOT=== 區塊。
+                        1. 只有當題目明確涉及「函數圖形」、「幾何座標」、「統計圖表」時，才生成 Python 程式碼。
                         2. 程式碼必須能直接執行，並包在 `===PLOT===` 與 `===PLOT_END===` 之間。
                         3. 圖表標題、座標軸請使用中文。
                         4. ⚠️ 嚴格 LaTeX 規範：Python 字串請用 raw string (r'...')。分數務必寫成 r'$\frac{a}{b}$' (必加括號)。
-                        5. ⚠️ 3D繪圖：若是空間坐標題，請務必使用 `ax = fig.add_subplot(111, projection='3d')` 來建立三維坐標系。
+                        5. ⚠️ 3D繪圖：若是空間坐標題，請務必使用 `ax = fig.add_subplot(111, projection='3d')`。
                         """
 
                         common_role = f"角色：你是 Jutor。年級：{selected_grade}。題目：{question_target}。"
@@ -279,6 +308,7 @@ if not st.session_state.is_solving:
                         else:
                             style = "風格：純算式、LaTeX、極簡。"
 
+                        # --- 修正重點：加入「多選題」判斷邏輯 ---
                         prompt = f"""
                         {guardrail}
                         {transcription}
@@ -286,6 +316,11 @@ if not st.session_state.is_solving:
                         {plotting}
                         {common_role}
                         {style}
+                        
+                        【題型辨識重要指令】
+                        1. 請先判斷題目是否為 **「多選題」** (Multiple Choice)。
+                        2. 若題目包含「選出正確選項」、「下列何者正確」或有 (1)(2)(3)(4)(5) 等多個選項，**請務必假設可能有多個正確答案**。
+                        3. 請逐一分析每個選項的正確性，不要找到一個對的就停止。
 
                         結構要求：
                         (描述) ===DESC=== ... ===DESC_END===
@@ -296,10 +331,10 @@ if not st.session_state.is_solving:
                         ...
                         本題答案 ===STEP=== 
                         ### 🎯 驗收類題
-                        (請在此處直接出題，讓標題與題目在同一個區塊顯示，不要用STEP分隔)
+                        (請在此處直接出題，標題與題目在同一個區塊)
                         ===STEP=== 
                         🗝️ 類題答案
-                        (請「僅提供」最終數值或答案選項，不要顯示任何計算過程或詳解)
+                        (僅提供最終答案，不需詳解)
                         """
 
                         response, key_suffix = call_gemini_with_rotation(prompt, image, use_pro=use_pro)
@@ -364,6 +399,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
             
     current_step_text = st.session_state.solution_steps[st.session_state.step_index]
     with st.chat_message("assistant", avatar=assistant_avatar):
+        # 直接顯示，不使用打字機，避免 LaTeX 閃爍
         trigger_vibration()
         st.markdown(current_step_text)
 
