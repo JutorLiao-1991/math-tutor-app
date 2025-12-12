@@ -155,7 +155,6 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
         st.stop()
     
     shuffled_keys = keys.copy()
-    random.shuffle(shuffled_keys)
     
     # --- 使用 Gemini 2.5 模型 ---
     if use_pro:
