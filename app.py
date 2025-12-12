@@ -104,7 +104,7 @@ else:
 assistant_avatar = "🦔" 
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v6.8", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v6.9", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 CORRECT_FONT_NAME = configure_chinese_font()
 
@@ -147,11 +147,23 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 【強力排版修復 v3.1】修正數學顯示 ---
+# --- 【智能排版修復 v4】混合模式 ---
 def clean_output_format(text):
     if not text: return text
     
-    # 1. 暴力降維: $$...$$ -> $...$
+    # 1. 【程式碼誤用修復】
+    # 如果 AI 笨笨地把 LaTeX 寫在 code block 裡 (例如 `\frac{...}`)
+    # 我們把它拆出來，強制轉回 LaTeX 格式 ($...$)
+    # 邏輯：Code block 內如果有反斜線或大括號，通常是誤判的 LaTeX
+    def fix_latex_in_code(match):
+        content = match.group(1)
+        if '\\' in content or '{' in content or '^' in content:
+            return f"${content}$"
+        return match.group(0) # 否則保持原樣 (真的是程式碼或變數)
+    
+    text = re.sub(r'`([^`\n]+?)`', fix_latex_in_code, text)
+
+    # 2. Block Math 暴力降維 ($$ -> $)
     def block_to_inline(match):
         content = match.group(1)
         if len(content) < 50 and '\\\\' not in content and 'align' not in content:
@@ -159,14 +171,13 @@ def clean_output_format(text):
         return match.group(0)
     text = re.sub(r'\$\$([\s\S]*?)\$\$', block_to_inline, text)
 
-    # 2. 括號與標點修復
+    # 3. 括號與標點修復
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
 
-    # 3. 中文黏合劑
+    # 4. 中文黏合劑
     cjk = r'[\u4e00-\u9fa5]'
     short_content = r'(?:(?!\n|•|- |\* ).){1,30}' 
-    
     for _ in range(2):
         pattern = f'(?<={cjk})\s*\\n+\s*({short_content})\s*\\n+\s*(?={cjk}|[，。！？：,.?])'
         text = re.sub(pattern, r' \1 ', text)
@@ -221,7 +232,7 @@ with col1:
 with col2:
     st.title("鳩特數理 AI 夥伴")
     # 更新時間戳記
-    st.caption("Jutor AI 教學系統 v6.8 (數學顯示修復版 20:20)")
+    st.caption("Jutor AI 教學系統 v6.9 (混合排版修復版 12/12 20:40)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -276,14 +287,14 @@ if not st.session_state.is_solving:
 
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
                         
-                        # --- 修正重點 1：數學排版格式指令 (禁止程式碼風格) ---
+                        # --- 修正重點 1：混合排版策略 (Hybrid Strategy) ---
                         formatting = """
-                        【排版嚴格指令】
-                        1. **嚴禁程式碼風格**：解說中的數學式**必須**使用 LaTeX 語法。
-                           - ❌ 錯誤：`frac{x^2}{2}` (缺反斜線)、`20 * 5` (用星號)、`x^2` (未渲染)
-                           - ✅ 正確：`\\frac{x^2}{2}`、`20 \\times 5`、`$x^2$`
-                        2. **行內數學**：所有單獨的變數或短算式，必須用 `$ ... $` 包裹 (Inline Math)。禁止使用反引號 (Code Block) 來顯示算式。
-                        3. **數值不換行**：純數字、變數必須緊跟在文字後，嚴禁換行。
+                        【排版嚴格指令 (Hybrid Mode)】
+                        1. **簡單數值 (Green Mode)**：單獨的變數 (如 x, y, a)、純數字 (如 288, -34)、極短式子 (如 a=1)，請務必使用「反引號 (Backticks)」包裹。
+                           - 範例：係數是 `-34`，變數是 `x`。 (這樣會顯示綠色高亮且不換行)
+                        2. **複雜算式 (LaTeX Mode)**：分數、根號、次方、積分等，請務必使用 LaTeX 語法 `$ ... $`。
+                           - 範例：答案是 $\\frac{1}{2}$ 或 $x^2$。
+                        3. **禁止程式碼運算符**：在 LaTeX 中，乘法請用 `\\times`，禁止用 `*`。除法請用 `\\div` 或分數，禁止用程式碼的 `/`。
                         """
                         
                         plotting = """
@@ -301,6 +312,7 @@ if not st.session_state.is_solving:
                         else:
                             style = "風格：純算式、LaTeX、極簡。"
 
+                        # --- 修正重點 2：多選題判斷 ---
                         prompt = f"""
                         {guardrail}
                         {transcription}
