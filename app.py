@@ -36,7 +36,8 @@ def inject_custom_css():
         unsafe_allow_html=True,
     )
 
-# --- 字型設定 ---
+# --- 優化：快取字體設定 ---
+@st.cache_resource
 def configure_chinese_font():
     font_file = "NotoSansTC-Regular.ttf"
     if os.path.exists(font_file):
@@ -52,6 +53,33 @@ def configure_chinese_font():
     else:
         return "sans-serif"
 
+# --- 優化：快取 Google Sheets 連線 ---
+@st.cache_resource
+def get_google_sheet_client():
+    try:
+        if "gcp_service_account" in st.secrets:
+            scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+            client = gspread.authorize(creds)
+            return client
+    except Exception as e:
+        print(f"GCP 連線失敗: {e}")
+    return None
+
+def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
+    try:
+        client = get_google_sheet_client()
+        if client:
+            sheet = client.open("Jutor_Learning_Data").sheet1
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            sheet.append_row([timestamp, grade, mode, image_desc, full_response, key_info])
+            return True
+    except Exception as e:
+        st.cache_resource.clear()
+        return False
+
 # --- 圖片與頭像 ---
 main_logo_path = "logo.jpg"
 if os.path.exists(main_logo_path):
@@ -61,7 +89,7 @@ else:
 assistant_avatar = "🦔" 
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v5.8", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v6.0", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 CORRECT_FONT_NAME = configure_chinese_font()
 
@@ -83,27 +111,12 @@ if 'used_key_suffix' not in st.session_state: st.session_state.used_key_suffix =
 def stream_text(text):
     for char in text:
         yield char
-        time.sleep(0.02)
+        # 保留打字機效果，速度微調
+        time.sleep(0.01)
 
 def trigger_vibration():
     vibrate_js = """<script>if(navigator.vibrate){navigator.vibrate(30);}</script>"""
     components.html(vibrate_js, height=0, width=0)
-
-def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
-    try:
-        if "gcp_service_account" in st.secrets:
-            scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-            creds_dict = dict(st.secrets["gcp_service_account"])
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-            creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
-            client = gspread.authorize(creds)
-            sheet = client.open("Jutor_Learning_Data").sheet1
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            sheet.append_row([timestamp, grade, mode, image_desc, full_response, key_info])
-            return True
-    except Exception as e:
-        print(f"存檔失敗: {e}")
-        return False
 
 def execute_and_show_plot(code_snippet):
     try:
@@ -125,24 +138,40 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 排版清理大師 (加強版) ---
+# --- 【關鍵修改】排版強力膠水 ---
 def clean_output_format(text):
+    """
+    修復 AI 生成的排版問題：
+    1. 黏合標點符號。
+    2. 黏合被斷行的短數字、變數、負數。
+    """
     if not text: return text
     
     # 1. 處理標點符號單獨成行 (黏回上一行)
-    # 抓取：換行 + (空白) + 標點
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
     
-    # 2. 處理「單獨變數」被換行的問題 (這是你截圖中的問題)
-    # 邏輯：中文 -> 換行 -> 短變數($x$或$a=1$) -> 換行 -> 中文
-    # 強制把換行去掉，變成：中文 $x$ 中文
-    # [\u4e00-\u9fa5] 是常用漢字範圍
+    # 2. 【強力膠水】處理「三明治斷行」
+    # 偵測模式：中文/文字 -> 換行 -> (短內容) -> 換行 -> 中文/文字
+    # 短內容包括：
+    #   - 純數字 (288)
+    #   - 負數 (-34)
+    #   - 變數 (x, y, n)
+    #   - 簡單 LaTeX ($x$, $-34$, $2\pi$)
     
-    # 針對單個變數 (如 $x$, $y$)
-    text = re.sub(r'([\u4e00-\u9fa5])\s*\n\s*(\$[a-zA-Z]\$)\s*\n\s*([\u4e00-\u9fa5])', r'\1 \2 \3', text)
+    # 正則表達式解釋：
+    # (?<=[^\n]) : 前面不是換行符
+    # \n\s* : 換行 + 空白
+    # (...) : 捕捉中間的短內容 (數字、變數、LaTeX)
+    # \s*\n : 空白 + 換行
+    # (?=[^\n]) : 後面不是換行符
     
-    # 針對短式子 (如 $a=1$)
-    text = re.sub(r'([\u4e00-\u9fa5])\s*\n\s*(\$[a-zA-Z0-9=]+\$)\s*\n\s*([\u4e00-\u9fa5])', r'\1 \2 \3', text)
+    # 針對純數字與變數 (如 288, -34, x, y)
+    pattern_num_var = r'(?<=[^\n])\n\s*([-]?\d+|[a-zA-Z])\s*\n(?=[^\n])'
+    text = re.sub(pattern_num_var, r' \1 ', text)
+    
+    # 針對行內 LaTeX (如 $x$, $-34$)
+    pattern_latex = r'(?<=[^\n])\n\s*(\$[^$\n]+\$)\s*\n(?=[^\n])'
+    text = re.sub(pattern_latex, r' \1 ', text)
 
     return text
 
@@ -193,7 +222,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理 AI 夥伴")
-    st.caption("Jutor AI 教學系統 v5.8 (更新時間: 2025/12/12 18:10)")
+    st.caption("Jutor AI 教學系統 v6.0 (排版修復版 18:25)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -248,28 +277,15 @@ if not st.session_state.is_solving:
 
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
                         
-                        # --- 修正重點：排版指令大升級 ---
+                        # --- 修正重點：Prompt 明確要求行內格式 ---
                         formatting = """
-                        【排版嚴格要求 - 非常重要】
-                        1. **區分行內與區塊數學式**：
-                           - 當數學符號是句子的一部分（例如：找出 $x$ 的值、已知 $a=1$），請使用行內格式 `$...$` 且**不要換行**。
-                           - 嚴禁將「句子中的小符號」獨立成一行。
-                           - 正確：所以我們知道 $x=1$ 是答案。
-                           - 錯誤：所以我們知道 \n $x=1$ \n 是答案。
-                        
-                        2. **計算過程 (直式對齊)**：
-                           - 只有在展示「多步驟運算」時，才使用換行。
-                           - 請使用 LaTeX 的 aligned 環境。
-                           - 範例：
-                           $$
-                           \\begin{aligned}
-                           y &= 2x + 1 \\\\
-                             &= 2(3) + 1 \\\\
-                             &= 7
-                           \\end{aligned}
-                           $$
-                        
-                        3. **標點符號**：標點符號必須緊跟文字，不可換行。
+                        【排版嚴格指令 - 關於數值與變數】
+                        1. **絕對禁止**將純數字(如 288, -34)、變數(如 x, y)或極短的式子(如 a=1)獨立成一行。
+                        2. 這些數值**必須**跟隨在前後文字之間 (Inline)。
+                           - 錯誤：係數是 \n -34 \n 。
+                           - 正確：係數是 -34 。
+                        3. 單純數值或變數，請直接書寫或使用 `$x$` (一個錢字號)，**嚴禁**使用 `$$x$$` (兩個錢字號)，因為那會強制換行。
+                        4. 只有在「多行計算過程」時，才使用 `$$ ... $$` 或 `aligned` 環境進行換行對齊。
                         """
                         
                         plotting = """
@@ -311,7 +327,7 @@ if not st.session_state.is_solving:
                         if "REFUSE_OFF_TOPIC" in response.text:
                             st.error("🙅‍♂️ 這個學校好像不會考喔！(若為誤判，請嘗試裁切圖片)")
                         else:
-                            # 套用升級版的文字清洗
+                            # 套用強力膠水函式
                             full_text = clean_output_format(response.text)
                             
                             image_desc = "無描述"
