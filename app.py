@@ -73,7 +73,7 @@ else:
 assistant_avatar = "🦔" 
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v5.2", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v5.3", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 
 # --- 啟動時執行字型設定 ---
@@ -154,7 +154,10 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
         st.error("API_KEYS 設定錯誤")
         st.stop()
     
-    shuffled_keys = keys.copy()
+    # --- 關鍵修正：確保順序不被打亂 ---
+    # 移除 random.shuffle，確保依序使用 (免費優先 -> 付費在後)
+    target_keys = keys.copy()
+    # random.shuffle(target_keys) # <--- 已移除隨機洗牌
     
     # --- 使用 Gemini 2.5 模型 ---
     if use_pro:
@@ -164,7 +167,7 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
     
     last_error = None
     
-    for key in shuffled_keys:
+    for key in target_keys:
         try:
             genai.configure(api_key=key)
             model = genai.GenerativeModel(model_name)
@@ -185,16 +188,15 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
 
 col1, col2 = st.columns([1, 4]) 
 with col1:
-    # --- 修正處：優先顯示 Logo 圖片 ---
+    # --- 優先顯示 Logo 圖片 ---
     if os.path.exists(main_logo_path):
         st.image(main_logo_path, use_column_width=True)
     else:
-        # 找不到圖片才顯示 Emoji
         st.markdown("<div style='font-size: 3rem; text-align: center;'>🦔</div>", unsafe_allow_html=True)
 
 with col2:
     st.title("鳩特數理 AI 夥伴")
-    st.caption("Jutor AI 教學系統 v5.2 (Powered by Gemini 2.5)")
+    st.caption("Jutor AI 教學系統 v5.3 (Powered by Gemini 2.5)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -251,14 +253,14 @@ if not st.session_state.is_solving:
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
                         formatting = "【排版】文字算式分行。長算式用 `\\\\` 換行。"
                         
-                        # --- 修正重點：加強繪圖提示詞，防止 LaTeX 簡寫報錯 ---
+                        # --- 修正重點：加強繪圖提示詞，防止報錯，防止濫畫 ---
                         plotting = """
                         【繪圖能力啟動】
-                        如果題目涉及「函數圖形」或「幾何座標」，請產生 Python 程式碼 (matplotlib + numpy)。
-                        1. 程式碼必須能直接執行。
-                        2. 必須包在 `===PLOT===` 與 `===PLOT_END===` 之間。
+                        1. 只有當題目明確涉及「函數圖形」、「幾何座標」、「統計圖表」時，才生成 Python 程式碼 (matplotlib)。若為純代數運算，請勿繪圖，不要輸出 ===PLOT=== 區塊。
+                        2. 程式碼必須能直接執行，並包在 `===PLOT===` 與 `===PLOT_END===` 之間。
                         3. 圖表標題、座標軸請使用中文。
-                        4. ⚠️ 嚴格 LaTeX 規範：Python 字串請用 raw string (r'...')。分數務必寫成 r'$\frac{a}{b}$' (必加括號)，禁止使用 \frac a b 這種簡寫，否則會報錯。
+                        4. ⚠️ 嚴格 LaTeX 規範：Python 字串請用 raw string (r'...')。分數務必寫成 r'$\frac{a}{b}$' (必加括號)，禁止使用 \frac a b 這種簡寫。
+                        5. ⚠️ 座標軸檢核：若使用 plt.xticks 或 set_ticks 自訂刻度，務必確保 ticks 列表與 labels 列表的長度完全一致，否則禁止設定。
                         """
 
                         common_role = f"角色：你是 Jutor。年級：{selected_grade}。題目：{question_target}。"
@@ -330,14 +332,14 @@ if st.session_state.is_solving and st.session_state.solution_steps:
     
     header_text = "🗣️ Jutor 口語教學中" if st.session_state.solve_mode == "verbal" else "🔢 純算式推導中"
     
-    # --- 修正 1：移除 Flash 的括號顯示，只保留 Pro 標記 ---
     if st.session_state.use_pro_model:
         st.markdown(f"### {header_text} (🔥 2.5 Pro 救援)")
     else:
-        st.markdown(f"### {header_text}") # 這裡已經移除 (⚡ 2.5 Flash)
+        st.markdown(f"### {header_text}") 
     
     if st.session_state.plot_code:
-        with st.expander("📊 查看幾何/函數圖形 (AI 繪製)", expanded=True):
+        # --- 修正文字：拿掉 (AI 繪製) ---
+        with st.expander("📊 查看幾何/函數圖形", expanded=True):
             execute_and_show_plot(st.session_state.plot_code)
 
     for i in range(st.session_state.step_index):
@@ -415,7 +417,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.button("👌 回到主流程", on_click=exit_qa_mode, use_container_width=True)
 
     else:
-        # --- 最終頁面 (顯示恭喜與重置) ---
+        # --- 最終頁面 ---
         st.markdown("---")
         st.success("🎉 恭喜完成！")
         col_end_back, col_end_reset = st.columns([1, 2])
@@ -436,7 +438,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.session_state.use_pro_model = False
                 st.rerun()
 
-        # --- 修正 2：救援按鈕移到這裡 (只有在看完最後一頁時才出現) ---
+        # --- 救援按鈕 (只有在看完最後一頁時才出現) ---
         if not st.session_state.use_pro_model:
             st.markdown("")
             st.markdown("")
