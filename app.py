@@ -73,6 +73,7 @@ def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
         client = get_google_sheet_client()
         if client:
             sheet = client.open("Jutor_Learning_Data").sheet1
+            # 這裡存的是 Server 時間 (通常是 UTC)
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             sheet.append_row([timestamp, grade, mode, image_desc, full_response, key_info])
             return True
@@ -89,7 +90,7 @@ else:
 assistant_avatar = "🦔" 
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v6.4", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v6.6", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 CORRECT_FONT_NAME = configure_chinese_font()
 
@@ -97,7 +98,7 @@ CORRECT_FONT_NAME = configure_chinese_font()
 if 'step_index' not in st.session_state: st.session_state.step_index = 0
 if 'solution_steps' not in st.session_state: st.session_state.solution_steps = []
 if 'is_solving' not in st.session_state: st.session_state.is_solving = False
-if 'streaming_done' not in st.session_state: st.session_state.streaming_done = False # 雖然移除特效，但保留此變數以防萬一
+if 'streaming_done' not in st.session_state: st.session_state.streaming_done = False
 if 'in_qa_mode' not in st.session_state: st.session_state.in_qa_mode = False
 if 'qa_history' not in st.session_state: st.session_state.qa_history = []
 if 'solve_mode' not in st.session_state: st.session_state.solve_mode = "verbal"
@@ -136,7 +137,6 @@ def execute_and_show_plot(code_snippet):
 def clean_output_format(text):
     if not text: return text
     
-    # 1. Block Math 轉 Inline Math (避免 $$x$$ 造成換行)
     def block_to_inline(match):
         content = match.group(1)
         if len(content) < 40 and '\\\\' not in content and 'align' not in content:
@@ -144,23 +144,12 @@ def clean_output_format(text):
         return match.group(0)
     text = re.sub(r'\$\$([\s\S]*?)\$\$', block_to_inline, text)
 
-    # 2. 括號縫合 (如 ( \n 289 \n ))
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
 
-    # 3. 三明治強力膠 v3 (針對截圖中的頑固換行)
-    # 邏輯：只要是 "換行 -> 短內容 -> 換行"，前後不管接什麼，都先把換行殺掉
-    # 這能解決 "數字：" 後面接換行，或是 "數字" 後面接 "," 的情況
-    
-    # 為了安全，我們分兩步走：
-    # 3a. 先處理前面的換行： [非換行字元] \n [短內容]
-    # (?<=\S) 表示前面必須有非空白字元
     short_content = r'(?:(?!\n|•|- |\* ).){1,25}' 
     text = re.sub(f'(?<=\\S)\\s*\\n\\s*({short_content})(?=\\s)', r' \1', text)
-    
-    # 3b. 再處理後面的換行： [短內容] \n [非換行字元]
     text = re.sub(f'({short_content})\\s*\\n\\s*(?=\\S)', r'\1 ', text)
 
-    # 4. 標點黏合 (再次確保)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
 
     return text
@@ -212,7 +201,8 @@ with col1:
 
 with col2:
     st.title("鳩特數理 AI 夥伴")
-    st.caption("Jutor AI 教學系統 v6.4 (穩定修復版 19:45)")
+    # --- 更新時間戳記 ---
+    st.caption("Jutor AI 教學系統 v6.6 (更新時間: 2025/12/12 19:55)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -280,6 +270,7 @@ if not st.session_state.is_solving:
                         2. 程式碼必須能直接執行，並包在 `===PLOT===` 與 `===PLOT_END===` 之間。
                         3. 圖表標題、座標軸請使用中文。
                         4. ⚠️ 嚴格 LaTeX 規範：Python 字串請用 raw string (r'...')。分數務必寫成 r'$\frac{a}{b}$' (必加括號)。
+                        5. ⚠️ 3D繪圖：若是空間坐標題，請務必使用 `ax = fig.add_subplot(111, projection='3d')` 來建立三維坐標系。
                         """
 
                         common_role = f"角色：你是 Jutor。年級：{selected_grade}。題目：{question_target}。"
@@ -288,7 +279,6 @@ if not st.session_state.is_solving:
                         else:
                             style = "風格：純算式、LaTeX、極簡。"
 
-                        # --- 修正：類題只給答案 ---
                         prompt = f"""
                         {guardrail}
                         {transcription}
@@ -374,7 +364,6 @@ if st.session_state.is_solving and st.session_state.solution_steps:
             
     current_step_text = st.session_state.solution_steps[st.session_state.step_index]
     with st.chat_message("assistant", avatar=assistant_avatar):
-        # --- 修正：移除打字機效果，直接顯示以避免灰色閃爍 ---
         trigger_vibration()
         st.markdown(current_step_text)
 
@@ -429,7 +418,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                             try:
                                 full_prompt = "對話紀錄:\n" + "\n".join([f"{h['role']}:{h['parts'][0]}" for h in st.session_state.qa_history]) + f"\n新問題:{user_question}"
                                 response, _ = call_gemini_with_rotation(full_prompt, use_pro=st.session_state.use_pro_model)
-                                st.markdown(response.text) # 這裡也移除打字機
+                                st.markdown(response.text)
                                 st.session_state.qa_history.append({"role": "model", "parts": [response.text]})
                             except: st.error("忙碌中")
                     st.rerun()
