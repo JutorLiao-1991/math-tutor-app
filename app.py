@@ -22,10 +22,10 @@ def inject_custom_css():
         .katex-html { overflow-x: auto; overflow-y: hidden; max-width: 100%; display: block; padding-bottom: 5px; }
         .stMarkdown { max-width: 100%; overflow-wrap: break-word; }
         .stChatMessage .stChatMessageAvatar {
-            width: 2.8rem; /* 稍微放大一點頭像 */
+            width: 2.8rem;
             height: 2.8rem;
             background-color: #f0f2f6; 
-            border-radius: 50%; /* 讓頭像變圓形 */
+            border-radius: 50%;
             object-fit: cover;
         }
         </style>
@@ -33,38 +33,43 @@ def inject_custom_css():
         unsafe_allow_html=True,
     )
 
-# --- 自動下載並設定中文字型 ---
+# --- 【終極修正】自動下載並取得正確的字型名稱 ---
 def configure_chinese_font():
-    font_name = "NotoSansCJKtc-Regular.otf"
-    if not os.path.exists(font_name):
-        # 靜默下載，不印出太多訊息
+    font_file = "NotoSansCJKtc-Regular.otf"
+    font_url = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf"
+    
+    # 1. 下載字型 (如果不存在)
+    if not os.path.exists(font_file):
         try:
-            url = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf"
-            response = requests.get(url)
-            with open(font_name, 'wb') as f:
+            response = requests.get(font_url)
+            with open(font_file, 'wb') as f:
                 f.write(response.content)
-        except:
-            pass 
+        except Exception:
+            pass # 靜默失敗，避免報錯
 
+    # 2. 強制註冊字型並取得內部名稱 (關鍵步驟)
     try:
-        fm.fontManager.addfont(font_name)
-        plt.rcParams['font.family'] = 'Noto Sans CJK TC'
-        plt.rcParams['axes.unicode_minus'] = False
-    except:
-        pass
+        fm.fontManager.addfont(font_file)
+        # 直接讀取檔案屬性，獲取系統認定的真實名稱
+        prop = fm.FontProperties(fname=font_file)
+        font_name = prop.get_name() 
+        
+        # 3. 設定全域預設字型
+        plt.rcParams['font.family'] = font_name
+        plt.rcParams['axes.unicode_minus'] = False # 讓負號正常顯示
+        
+        return font_name # 回傳正確名稱以備用
+    except Exception:
+        return "sans-serif" # 保底
 
-# --- 圖片與頭像設定邏輯 ---
-# 1. 網站主 Logo (顯示在左上角)
+# --- 圖片與頭像設定 ---
 main_logo_path = "logo.jpg"
 if os.path.exists(main_logo_path):
     page_icon_set = Image.open(main_logo_path)
 else:
     page_icon_set = "🐦"
 
-# 2. 助手對話頭像 (顯示在對話框)
-# 優先找 avatar.jpg -> 其次找 logo.jpg -> 最後用 Emoji
 avatar_file_path = "avatar.jpg" 
-
 if os.path.exists(avatar_file_path):
     assistant_avatar = avatar_file_path
 elif os.path.exists(main_logo_path):
@@ -73,9 +78,11 @@ else:
     assistant_avatar = "🐦"
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v4.6", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v4.7", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
-configure_chinese_font()
+
+# --- 啟動時執行字型設定，並將正確名稱存入變數 ---
+CORRECT_FONT_NAME = configure_chinese_font()
 
 # --- 初始化 Session State ---
 if 'step_index' not in st.session_state: st.session_state.step_index = 0
@@ -115,14 +122,16 @@ def save_to_google_sheets(grade, mode, image_desc, full_response):
         print(f"存檔失敗: {e}")
         return False
 
+# --- 執行繪圖 (加入強制字型設定) ---
 def execute_and_show_plot(code_snippet):
     try:
-        # 重設字型確保中文正常
-        plt.rcParams['font.family'] = 'Noto Sans CJK TC'
+        # 在每次畫圖前，再次強制指定正確的字型名稱
+        plt.rcParams['font.family'] = CORRECT_FONT_NAME
         plt.rcParams['axes.unicode_minus'] = False
         
         plt.figure(figsize=(6, 4))
         plt.style.use('seaborn-v0_8-whitegrid') 
+        
         local_scope = {'plt': plt, 'np': np}
         exec(code_snippet, globals(), local_scope)
         st.pyplot(plt)
@@ -141,8 +150,6 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
     shuffled_keys = keys.copy()
     random.shuffle(shuffled_keys)
     
-    # Flash: 2.5-flash
-    # Pro: 2.5-pro
     model_name = 'models/gemini-2.5-pro' if use_pro else 'models/gemini-2.5-flash'
     
     last_error = None
@@ -168,14 +175,13 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
 
 col1, col2 = st.columns([1, 4]) 
 with col1:
-    # 這裡始終顯示主 Logo
     if os.path.exists(main_logo_path): 
         st.image(main_logo_path, use_column_width=True)
     else: 
         st.markdown("<h1 style='text-align: center;'>鳩</h1>", unsafe_allow_html=True)
 with col2:
     st.title("鳩特數理ＡＩ小幫手")
-    st.caption("AI 鳩特解題 v4.6 (獨立頭像版)")
+    st.caption("AI 鳩特解題 v4.7 (中文字型修復版)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -306,7 +312,6 @@ if st.session_state.is_solving and st.session_state.solution_steps:
             execute_and_show_plot(st.session_state.plot_code)
 
     for i in range(st.session_state.step_index):
-        # 這裡會讀取新的 avatar.jpg
         with st.chat_message("assistant", avatar=assistant_avatar):
             st.markdown(st.session_state.solution_steps[i])
             
@@ -355,7 +360,6 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                      if msg["role"] == "user": 
                          icon = "👤"
                      else: 
-                         # 這裡也會讀取新的 avatar.jpg
                          icon = assistant_avatar
                      
                      with st.chat_message(msg["role"], avatar=icon):
