@@ -12,7 +12,6 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import numpy as np
-import requests
 
 # --- 注入自定義 CSS ---
 def inject_custom_css():
@@ -27,61 +26,57 @@ def inject_custom_css():
             background-color: #f0f2f6; 
             border-radius: 50%;
             object-fit: cover;
+            font-size: 1.8rem; /* 調整 Emoji 大小 */
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
+        /* 隱藏預設的 Hamburger Menu (選用) */
+        /* #MainMenu {visibility: hidden;} */
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-# --- 【終極修正】自動下載並取得正確的字型名稱 ---
+# --- 【新版】字型設定：直接讀取本地檔案 ---
 def configure_chinese_font():
-    font_file = "NotoSansCJKtc-Regular.otf"
-    font_url = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf"
+    # 使用你上傳到 Github 的檔案
+    font_file = "NotoSansTC-Regular.ttf"
     
-    # 1. 下載字型 (如果不存在)
-    if not os.path.exists(font_file):
+    if os.path.exists(font_file):
         try:
-            response = requests.get(font_url)
-            with open(font_file, 'wb') as f:
-                f.write(response.content)
-        except Exception:
-            pass # 靜默失敗，避免報錯
-
-    # 2. 強制註冊字型並取得內部名稱 (關鍵步驟)
-    try:
-        fm.fontManager.addfont(font_file)
-        # 直接讀取檔案屬性，獲取系統認定的真實名稱
-        prop = fm.FontProperties(fname=font_file)
-        font_name = prop.get_name() 
-        
-        # 3. 設定全域預設字型
-        plt.rcParams['font.family'] = font_name
-        plt.rcParams['axes.unicode_minus'] = False # 讓負號正常顯示
-        
-        return font_name # 回傳正確名稱以備用
-    except Exception:
-        return "sans-serif" # 保底
+            # 註冊字體
+            fm.fontManager.addfont(font_file)
+            prop = fm.FontProperties(fname=font_file)
+            font_name = prop.get_name()
+            
+            # 設定 Matplotlib 預設
+            plt.rcParams['font.family'] = font_name
+            plt.rcParams['axes.unicode_minus'] = False 
+            return font_name
+        except Exception as e:
+            print(f"字體載入錯誤: {e}")
+            return "sans-serif"
+    else:
+        # 如果真的找不到檔案，回退到系統預設
+        return "sans-serif"
 
 # --- 圖片與頭像設定 ---
+# 這裡修改為優先使用刺蝟 Emoji
 main_logo_path = "logo.jpg"
 if os.path.exists(main_logo_path):
     page_icon_set = Image.open(main_logo_path)
 else:
-    page_icon_set = "🐦"
+    page_icon_set = "🦔"
 
-avatar_file_path = "avatar.jpg" 
-if os.path.exists(avatar_file_path):
-    assistant_avatar = avatar_file_path
-elif os.path.exists(main_logo_path):
-    assistant_avatar = main_logo_path
-else:
-    assistant_avatar = "🐦"
+# 設定 AI 頭像
+assistant_avatar = "🦔" 
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v4.7", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v4.9", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 
-# --- 啟動時執行字型設定，並將正確名稱存入變數 ---
+# --- 啟動時執行字型設定 ---
 CORRECT_FONT_NAME = configure_chinese_font()
 
 # --- 初始化 Session State ---
@@ -95,6 +90,8 @@ if 'solve_mode' not in st.session_state: st.session_state.solve_mode = "verbal"
 if 'data_saved' not in st.session_state: st.session_state.data_saved = False
 if 'plot_code' not in st.session_state: st.session_state.plot_code = None
 if 'use_pro_model' not in st.session_state: st.session_state.use_pro_model = False
+# 新增：觸發救援模式的開關
+if 'trigger_rescue' not in st.session_state: st.session_state.trigger_rescue = False 
 
 # --- 函數區 ---
 def stream_text(text):
@@ -134,6 +131,17 @@ def execute_and_show_plot(code_snippet):
         
         local_scope = {'plt': plt, 'np': np}
         exec(code_snippet, globals(), local_scope)
+        
+        # 再次確保 title/label 沒被程式碼覆蓋成預設字體 (Safe guard)
+        ax = plt.gca()
+        if ax.get_title(): ax.set_title(ax.get_title(), fontname=CORRECT_FONT_NAME)
+        if ax.get_xlabel(): ax.set_xlabel(ax.get_xlabel(), fontname=CORRECT_FONT_NAME)
+        if ax.get_ylabel(): ax.set_ylabel(ax.get_ylabel(), fontname=CORRECT_FONT_NAME)
+        # 圖例字體
+        legend = ax.get_legend()
+        if legend:
+            plt.setp(legend.get_texts(), fontname=CORRECT_FONT_NAME)
+
         st.pyplot(plt)
         plt.close()
     except Exception as e:
@@ -150,7 +158,11 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
     shuffled_keys = keys.copy()
     random.shuffle(shuffled_keys)
     
-    model_name = 'models/gemini-2.5-pro' if use_pro else 'models/gemini-2.5-flash'
+    # --- 關鍵修正：使用你清單中確認存在的 2.5 模型 ---
+    if use_pro:
+        model_name = 'models/gemini-2.5-pro'   # 救援模式
+    else:
+        model_name = 'models/gemini-2.5-flash' # 一般模式
     
     last_error = None
     
@@ -164,6 +176,7 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
                 response = model.generate_content(prompt_content)
             return response
         except Exception as e:
+            # 處理 Quota 限制 (429) 或 服務過載 (503)
             if "429" in str(e) or "Quota" in str(e) or "503" in str(e):
                 last_error = e
                 continue
@@ -175,13 +188,12 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
 
 col1, col2 = st.columns([1, 4]) 
 with col1:
-    if os.path.exists(main_logo_path): 
-        st.image(main_logo_path, use_column_width=True)
-    else: 
-        st.markdown("<h1 style='text-align: center;'>鳩</h1>", unsafe_allow_html=True)
+    # 頭像顯示邏輯
+    st.markdown("<div style='font-size: 3rem; text-align: center;'>🦔</div>", unsafe_allow_html=True)
+
 with col2:
-    st.title("鳩特數理ＡＩ小幫手")
-    st.caption("AI 鳩特解題 v4.7 (中文字型修復版)")
+    st.title("鳩特數理 AI 夥伴")
+    st.caption("Jutor AI 教學系統 v4.9 (Powered by Gemini 2.5)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -193,6 +205,7 @@ with col_grade_select:
 st.markdown("---")
 
 # --- 上傳區 ---
+# 如果不在解題中，顯示上傳介面
 if not st.session_state.is_solving:
     st.subheader("📸 1️⃣ 上傳題目 & 指定")
     uploaded_file = st.file_uploader("選擇圖片 (JPG, PNG)", type=["jpg", "png", "jpeg"], label_visibility="collapsed")
@@ -202,7 +215,7 @@ if not st.session_state.is_solving:
         st.image(image, caption='題目預覽', use_column_width=True)
         question_target = st.text_input("你想問圖片中的哪一題？", placeholder="例如：第 5 題...")
         
-        use_pro = st.checkbox("🔥 啟用 2.5 Pro 深度思考 (適合難題或 Flash 解錯時)", value=False)
+        # 隱藏原本的 Pro 勾選框，改為預設 Flash
         
         st.markdown("### 🚀 選擇解題模式：")
         col_btn_verbal, col_btn_math = st.columns(2)
@@ -211,16 +224,35 @@ if not st.session_state.is_solving:
         with col_btn_math:
             start_math = st.button("🔢 純算式解法", use_container_width=True)
 
-        if start_verbal or start_math:
+        # 觸發解題的條件：按鈕按下 OR 救援模式觸發
+        if start_verbal or start_math or st.session_state.trigger_rescue:
+            
             if not question_target:
                 st.warning("⚠️ 請先輸入你想問哪一題！")
             else:
-                mode = "verbal" if start_verbal else "math"
-                st.session_state.solve_mode = mode
-                st.session_state.use_pro_model = use_pro
-                
-                engine_name = "Jutor 2.5 Pro" if use_pro else "Jutor 2.5 Flash"
-                loading_text = f"{engine_name} 正在啟動繪圖引擎與分析..."
+                # 設定模式
+                if st.session_state.trigger_rescue:
+                    # 如果是救援模式，保持原有模式，但啟用 Pro
+                    mode = st.session_state.solve_mode
+                    use_pro = True 
+                    st.session_state.use_pro_model = True
+                    st.session_state.trigger_rescue = False # 重置觸發器
+                else:
+                    # 正常啟動
+                    mode = "verbal" if start_verbal else "math"
+                    st.session_state.solve_mode = mode
+                    use_pro = False # 預設 Flash
+                    st.session_state.use_pro_model = False
+
+                # 設定顯示文案
+                if use_pro:
+                    # 救援模式的文案
+                    loading_text = "Jutor Pro (2.5) 正在深度分析並修復錯誤..."
+                    current_avatar = "🔥"
+                else:
+                    # 一般模式的文案 (你的需求)
+                    loading_text = "Jutor AI (2.5) 正在思考怎麼教會你這題，並試著畫圖..."
+                    current_avatar = "🦔"
                 
                 with st.spinner(loading_text):
                     try:
@@ -232,7 +264,7 @@ if not st.session_state.is_solving:
                         如果題目涉及「函數圖形」或「幾何座標」，請產生 Python 程式碼 (matplotlib + numpy)。
                         1. 程式碼必須能直接執行。
                         2. 必須包在 `===PLOT===` 與 `===PLOT_END===` 之間。
-                        3. 圖表標題、座標軸若有中文，請直接使用中文(不用擔心字型問題，後台已設定好)。
+                        3. 圖表標題、座標軸請使用中文。
                         """
 
                         common_role = f"角色：你是 Jutor。年級：{selected_grade}。題目：{question_target}。"
@@ -303,18 +335,24 @@ if not st.session_state.is_solving:
 if st.session_state.is_solving and st.session_state.solution_steps:
     
     header_text = "🗣️ Jutor 口語教學中" if st.session_state.solve_mode == "verbal" else "🔢 純算式推導中"
+    
+    # 根據是否使用 Pro 顯示不同標頭
     if st.session_state.use_pro_model:
-        header_text += " (🔥 2.5 Pro)"
-    st.subheader(header_text)
+        # 顯示 2.5 Pro
+        st.markdown(f"### {header_text} (🔥 2.5 Pro 救援)")
+    else:
+        st.markdown(f"### {header_text} (⚡ 2.5 Flash)")
     
     if st.session_state.plot_code:
         with st.expander("📊 查看幾何/函數圖形 (AI 繪製)", expanded=True):
             execute_and_show_plot(st.session_state.plot_code)
 
+    # 顯示之前的步驟
     for i in range(st.session_state.step_index):
         with st.chat_message("assistant", avatar=assistant_avatar):
             st.markdown(st.session_state.solution_steps[i])
             
+    # 顯示當前步驟
     current_step_text = st.session_state.solution_steps[st.session_state.step_index]
     with st.chat_message("assistant", avatar=assistant_avatar):
         if not st.session_state.streaming_done:
@@ -325,6 +363,8 @@ if st.session_state.is_solving and st.session_state.solution_steps:
             st.markdown(current_step_text)
 
     total_steps = len(st.session_state.solution_steps)
+    
+    # --- 步驟導航與功能區 ---
     if st.session_state.step_index < total_steps - 1:
         if not st.session_state.in_qa_mode:
             st.markdown("---")
@@ -354,17 +394,18 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.button(btn_label, on_click=next_step, use_container_width=True, type="primary")
 
         else:
+            # QA 模式保持不變
             with st.container(border=True):
                 st.markdown("#### 💡 提問時間")
                 for msg in st.session_state.qa_history[2:]:
-                     if msg["role"] == "user": 
-                         icon = "👤"
-                     else: 
-                         icon = assistant_avatar
-                     
-                     with st.chat_message(msg["role"], avatar=icon):
-                         st.markdown(msg["parts"][0])
-                         
+                      if msg["role"] == "user": 
+                          icon = "👤"
+                      else: 
+                          icon = assistant_avatar
+                      
+                      with st.chat_message(msg["role"], avatar=icon):
+                          st.markdown(msg["parts"][0])
+                          
                 user_question = st.chat_input("請輸入問題...")
                 if user_question:
                     with st.chat_message("user", avatar="👤"): st.markdown(user_question)
@@ -404,3 +445,18 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.session_state.plot_code = None
                 st.session_state.use_pro_model = False
                 st.rerun()
+
+    # --- 新增：救援按鈕 (在頁面底部) ---
+    # 只有在還沒使用 Pro 模式，且不是 QA 模式時顯示
+    if not st.session_state.use_pro_model and not st.session_state.in_qa_mode:
+        st.markdown("")
+        st.markdown("")
+        st.markdown("---")
+        # 建立一個紅色警告區塊
+        warn_col1, warn_col2 = st.columns([2, 1])
+        with warn_col2:
+             if st.button("🚨 答案有錯！請 Jutor Pro 支援", use_container_width=True):
+                 st.session_state.trigger_rescue = True
+                 st.toast("正在召喚 Jutor Pro (2.5) 專家...", icon="🔥")
+                 time.sleep(1) # 讓提示顯示一下
+                 st.rerun()
