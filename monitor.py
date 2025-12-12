@@ -1,133 +1,116 @@
 import streamlit as st
 import google.generativeai as genai
 import time
-import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
-import plotly.express as px # 需要安裝 plotly: pip install plotly
-from datetime import datetime, timedelta
+import random
+from datetime import datetime, timedelta, timezone # 引入時間模組
 
-# --- 頁面設定 ---
-st.set_page_config(page_title="Jutor 戰情室", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Jutor API 監控室", page_icon="🕵️", layout="centered")
 
-st.title("📊 Jutor 戰情室：用量與健康監控")
+# --- 設定台灣時區 (UTC+8) ---
+tz_tw = timezone(timedelta(hours=8))
+current_time = datetime.now(tz_tw).strftime("%Y-%m-%d %H:%M:%S")
 
-# --- 1. 連線 Google Sheets 取得數據 ---
-@st.cache_data(ttl=60) # 設定快取 60 秒，避免一直讀取浪費額度
-def load_data():
+st.title("🕵️ Jutor API 多重分身監控室")
+st.caption(f"目前台灣時間：{current_time}") # 顯示當前時間
+st.markdown("這裡可以幫你測試每一把 API Key 目前是否還活著。")
+
+# --- 1. 輸入鑰匙區 ---
+use_secrets = st.checkbox("直接讀取 Secrets 裡的鑰匙", value=True)
+
+api_keys = []
+
+if use_secrets:
     try:
-        if "gcp_service_account" in st.secrets:
-            scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-            creds_dict = dict(st.secrets["gcp_service_account"])
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-            
-            creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
-            client = gspread.authorize(creds)
-            
-            # 讀取所有資料
-            sheet = client.open("Jutor_Learning_Data").sheet1
-            data = sheet.get_all_records()
-            return pd.DataFrame(data)
-    except Exception as e:
-        st.error(f"無法讀取數據: {e}")
-        return pd.DataFrame()
-
-df = load_data()
-
-# --- 2. 儀表板顯示區 ---
-
-if not df.empty:
-    # 資料前處理：轉換時間格式
-    # 假設 Excel 第一欄是 "時間" (2025-12-11 10:00:00)
-    # 如果您的欄位名稱不同，請這裡修改，例如 df['Timestamp']
-    # 這裡假設是用我們 app.py 產生的，是第一欄，如果 gspread 讀取有標題，通常 key 是標題
-    # 為了保險，我們直接看欄位名稱
-    
-    # 嘗試找出時間欄位 (通常是第一欄)
-    time_col = df.columns[0] 
-    df[time_col] = pd.to_datetime(df[time_col])
-    
-    # 篩選出今天的資料
-    today = datetime.now().date()
-    df_today = df[df[time_col].dt.date == today]
-    
-    # 計算指標
-    daily_requests = len(df_today)
-    daily_limit = 1500 * len(st.secrets["API_KEYS"]) # 假設一把鑰匙 1500 次，你有 N 把
-    
-    # 估算 Token (非常粗略：假設一題平均回答 500 字，約 800 tokens)
-    estimated_tokens = daily_requests * 800 
-    
-    # --- 顯示大數據卡片 ---
-    st.markdown("### 📅 今日戰況 (Daily Usage)")
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("今日解題總數", f"{daily_requests} 題", delta=f"剩餘額度約 {daily_limit - daily_requests}")
-    with col2:
-        st.metric("估算 Token 消耗", f"{estimated_tokens:,}", "僅供參考")
-    with col3:
-        # 找出最多人問的年級
-        try:
-            top_grade = df_today[df.columns[1]].mode()[0] # 假設第二欄是年級
-        except:
-            top_grade = "無資料"
-        st.metric("今日最愛問年級", top_grade)
-    with col4:
-        # 找出今日使用率 (百分比)
-        usage_rate = (daily_requests / daily_limit) * 100
-        st.metric("系統負載率", f"{usage_rate:.1f}%")
-
-    # --- 顯示圖表 ---
-    col_chart1, col_chart2 = st.columns(2)
-    
-    with col_chart1:
-        st.markdown("#### 🕐 今日提問熱點時段")
-        if not df_today.empty:
-            df_today['hour'] = df_today[time_col].dt.hour
-            hourly_counts = df_today['hour'].value_counts().sort_index()
-            st.bar_chart(hourly_counts)
-        else:
-            st.info("今天還沒有人問問題喔")
-
-    with col_chart2:
-        st.markdown("#### 🏆 各年級提問佔比 (歷史總計)")
-        if not df.empty:
-            grade_col = df.columns[1] # 假設第二欄是年級
-            pie_data = df[grade_col].value_counts()
-            fig = px.pie(values=pie_data.values, names=pie_data.index, hole=0.4)
-            st.plotly_chart(fig, use_container_width=True)
-
-    st.markdown("---")
-
-else:
-    st.warning("目前還沒有任何數據，請先讓學生使用 Jutor 解幾題吧！")
-
-
-# --- 3. (原本的) API 健康診斷區 ---
-st.markdown("### 🏥 API 健康診斷 (Real-time Health Check)")
-if st.button("🚀 掃描所有鑰匙狀態"):
-    try:
+        # 嘗試讀取 secrets
         keys = st.secrets["API_KEYS"]
-        if isinstance(keys, str): keys = [keys]
+        if isinstance(keys, str): 
+            api_keys = [keys]
+        else:
+            api_keys = keys
+        st.success(f"已從後台讀取到 {len(api_keys)} 把鑰匙。")
     except:
-        keys = []
-        st.error("找不到 Keys")
+        st.warning("找不到 Secrets 設定，請手動輸入。")
+else:
+    # 手動輸入模式
+    user_input = st.text_area("請輸入 API Keys (一行一個，或用逗號分隔)", height=150)
+    if user_input:
+        raw_keys = user_input.replace("\n", ",").split(",")
+        api_keys = [k.strip() for k in raw_keys if k.strip()]
 
-    if keys:
-        cols = st.columns(len(keys))
-        for i, key in enumerate(keys):
-            with cols[i]:
-                masked = f"Key-{i+1} (...{key[-4:]})"
-                try:
-                    genai.configure(api_key=key)
-                    model = genai.GenerativeModel('models/gemini-2.5-flash')
-                    start = time.time()
-                    model.generate_content("Hi", generation_config={"max_output_tokens": 1})
-                    duration = time.time() - start
-                    st.success(f"{masked}\n✅ 正常 ({duration:.2f}s)")
-                except Exception as e:
-                    if "429" in str(e):
-                        st.error(f"{masked}\n🔴 額度滿了")
-                    else:
-                        st.warning(f"{masked}\n⚠️ 異常")
+# --- 2. 開始診斷 ---
+if st.button("🚀 開始全系統診斷", type="primary"):
+    # 更新按下按鈕時的時間
+    diagnosis_time = datetime.now(tz_tw).strftime("%Y-%m-%d %H:%M:%S")
+    
+    if not api_keys:
+        st.error("沒有鑰匙可以測試！")
+    else:
+        st.markdown("---")
+        st.markdown(f"**診斷啟動時間：** `{diagnosis_time}`") # 顯示診斷當下時間
+        progress_bar = st.progress(0)
+        
+        results = []
+        
+        # --- 這裡不需要 Shuffle，保持你在 secrets 中的順序 ---
+        # 如果你有付費 Key 放在最後，它就會在最後才被測到
+        target_keys = api_keys.copy()
+        
+        for i, key in enumerate(target_keys):
+            # 遮罩顯示 Key
+            masked_key = f"...{key[-4:]}"
+            
+            try:
+                # 設定鑰匙
+                genai.configure(api_key=key)
+                # 測試用 Flash 模型最省最快
+                model = genai.GenerativeModel('models/gemini-2.5-flash')
+                
+                # 計時開始
+                start_time = time.time()
+                
+                # 發送訊號
+                response = model.generate_content("Hi", generation_config={"max_output_tokens": 1})
+                
+                # 計時結束 (這就是括號內顯示的秒數：延遲時間)
+                duration = time.time() - start_time
+                
+                # 成功！
+                status = "✅ 正常 (Active)"
+                detail = f"{duration:.2f}s" # 顯示延遲秒數
+                color = "green"
+                
+            except Exception as e:
+                error_msg = str(e)
+                if "429" in error_msg or "Quota exceeded" in error_msg:
+                    status = "🔴 額度已滿 (Overload)"
+                    detail = "需冷卻等待"
+                    color = "red"
+                elif "API key not valid" in error_msg:
+                    status = "Is ❌ 無效鑰匙 (Invalid)"
+                    detail = "Key 有誤"
+                    color = "grey"
+                else:
+                    status = "⚠️ 連線錯誤 (Error)"
+                    detail = "未知錯誤"
+                    color = "orange"
+            
+            # 更新進度條
+            progress_bar.progress((i + 1) / len(target_keys))
+            
+            # 顯示結果卡片
+            col1, col2, col3 = st.columns([2, 3, 2])
+            with col1:
+                st.code(masked_key)
+            with col2:
+                if color == "green":
+                    st.success(status)
+                elif color == "red":
+                    st.error(status)
+                else:
+                    st.warning(status)
+            with col3:
+                st.caption(detail)
+            
+            time.sleep(0.2) # 避免測試本身過快觸發限制
+            
+        st.success(f"診斷完成！(時間: {diagnosis_time})")
