@@ -10,8 +10,42 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 
+# --- 注入自定義 CSS (手機排版優化) ---
+def inject_custom_css():
+    st.markdown(
+        """
+        <style>
+        /* 讓手機版的數學公式如果太長，可以水平滑動，而不會擠壓變形 */
+        .katex-html {
+            overflow-x: auto;
+            overflow-y: hidden;
+            max-width: 100%;
+            display: block;
+            padding-bottom: 5px;
+        }
+        /* 調整 Markdown 文字在手機上的邊距 */
+        .stMarkdown {
+            max-width: 100%;
+            overflow-wrap: break-word;
+        }
+        /* 讓頭像的文字顯示得更清楚一點 */
+        .stChatMessage .stChatMessageAvatar {
+            background-color: #f0f2f6;
+            color: #31333F;
+            font-weight: bold;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 # --- 頁面設定 ---
-st.set_page_config(page_title="鳩特數理ＡＩ小幫手", page_icon="🦔", layout="centered")
+# 注意：page_icon (瀏覽器分頁標籤) 必須是 emoji 或圖片路徑，不能是中文字
+# 所以分頁標籤我保留為 "🐦"，但介面裡面會用 "鳩"
+st.set_page_config(page_title="AI 鳩特解題 v3.6", page_icon="🐦", layout="centered")
+
+# --- 立即執行 CSS 注入 ---
+inject_custom_css()
 
 # --- 初始化 Session State ---
 if 'step_index' not in st.session_state:
@@ -42,7 +76,7 @@ def trigger_vibration():
     vibrate_js = """<script>if(navigator.vibrate){navigator.vibrate(30);}</script>"""
     components.html(vibrate_js, height=0, width=0)
 
-# --- 函數：寫入 Google Sheets (存文字描述版) ---
+# --- 函數：寫入 Google Sheets ---
 def save_to_google_sheets(grade, mode, image_desc, full_response):
     try:
         if "gcp_service_account" in st.secrets:
@@ -56,7 +90,6 @@ def save_to_google_sheets(grade, mode, image_desc, full_response):
             sheet = client.open("Jutor_Learning_Data").sheet1
             
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            # 欄位順序：時間 | 年級 | 模式 | 題目描述(AI轉譯) | AI完整回答
             sheet.append_row([timestamp, grade, mode, image_desc, full_response])
             return True
     except Exception as e:
@@ -103,9 +136,11 @@ with col1:
     if os.path.exists("logo.jpg"):
         st.image("logo.jpg", use_column_width=True)
     else:
-        st.write("🦔") 
+        # 【修改】若無 Logo 圖片，直接顯示大大的 "鳩" 字
+        st.markdown("<h1 style='text-align: center;'>鳩</h1>", unsafe_allow_html=True)
 with col2:
     st.title("鳩特數理ＡＩ小幫手")
+    st.caption("AI 鳩特解題 v3.6")
 
 # --- 年級 ---
 st.markdown("---")
@@ -158,19 +193,31 @@ if not st.session_state.is_solving:
                         如果是課業問題，請繼續執行解題。
                         """
 
-                        # --- 新增：文字轉譯指令 ---
+                        # 文字轉譯指令
                         transcription_instruction = f"""
                         【隱藏任務：題目轉譯 (資料庫用)】
                         在開始解題前，請先執行以下動作：
                         1. 將使用者指定之題目（{question_target}）的文字完整辨識出來。
-                        2. 若題目包含圖形（幾何、函數圖），請用精確的數學語言描述（例如：「開口向上的拋物線，頂點在(0,0)」或「直角三角形ABC，角B為90度」）。
+                        2. 若題目包含圖形，請用精確的數學語言描述。
                         3. 將這段描述包在 `===DESC===` 與 `===DESC_END===` 之間。
+                        """
+                        
+                        # 手機排版指令 (強制換行)
+                        formatting_instruction = """
+                        【最高排版指令：手機閱讀優化】
+                        1. **文字與算式必須分行**：嚴禁將中文解釋與數學算式擠在同一行。
+                           (錯誤範例：計算面積 A A = x * y)
+                           (正確範例：
+                            計算面積 A：
+                            $$ A = x \times y $$)
+                        2. **長算式強制換行**：如果一個算式非常長（超過 25 個字元），請務必在適當的運算符號後使用 LaTeX 的換行語法 `\\\\` 將其切分為多行顯示，確保手機易讀。
                         """
 
                         if mode == "verbal":
                             prompt = f"""
                             {guardrail_instruction}
                             {transcription_instruction}
+                            {formatting_instruction}
                             
                             角色：你是一位幽默、親切、很會講譬喻的數學家教「Jutor」。
                             學生年級：【{selected_grade}】。指定題目：【{question_target}】。
@@ -191,6 +238,7 @@ if not st.session_state.is_solving:
                             prompt = f"""
                             {guardrail_instruction}
                             {transcription_instruction}
+                            {formatting_instruction}
 
                             角色：你是一個純數學運算引擎。
                             學生年級：【{selected_grade}】。指定題目：【{question_target}】。
@@ -211,20 +259,16 @@ if not st.session_state.is_solving:
                         if "REFUSE_OFF_TOPIC" in response.text:
                             st.error("🙅‍♂️ 這個學校好像不會考喔！請上傳數學或理化相關的題目。")
                         else:
-                            # --- 關鍵：資料解析 (把描述跟步驟切開) ---
                             full_text = response.text
                             image_desc = "無描述"
                             
-                            # 1. 抓取描述
                             desc_match = re.search(r"===DESC===(.*?)===DESC_END===", full_text, re.DOTALL)
                             if desc_match:
                                 image_desc = desc_match.group(1).strip()
-                                # 從顯示內容中移除描述區塊，不要讓學生看到
                                 display_text = full_text.replace(desc_match.group(0), "").strip()
                             else:
                                 display_text = full_text
 
-                            # 2. 切割步驟
                             raw_steps = display_text.split("===STEP===")
                             st.session_state.solution_steps = [step.strip() for step in raw_steps if step.strip()]
                             st.session_state.step_index = 0
@@ -234,7 +278,6 @@ if not st.session_state.is_solving:
                             st.session_state.qa_history = []
                             st.session_state.data_saved = False
 
-                            # 3. 存檔 (存入 AI 轉譯後的文字描述)
                             save_to_google_sheets(selected_grade, "指令教學" if mode=="verbal" else "純算式", image_desc, display_text)
                             
                             st.rerun()
@@ -258,11 +301,13 @@ if st.session_state.is_solving and st.session_state.solution_steps:
     st.subheader(header_text)
     
     for i in range(st.session_state.step_index):
-        with st.chat_message("assistant", avatar="🦔"):
+        # 【修改】Avatar 改成文字 "鳩"
+        with st.chat_message("assistant", avatar="鳩"):
             st.markdown(st.session_state.solution_steps[i])
             
     current_step_text = st.session_state.solution_steps[st.session_state.step_index]
-    with st.chat_message("assistant", avatar="🦔"):
+    # 【修改】Avatar 改成文字 "鳩"
+    with st.chat_message("assistant", avatar="鳩"):
         if not st.session_state.streaming_done:
             trigger_vibration()
             st.write_stream(stream_text(current_step_text))
@@ -308,7 +353,8 @@ if st.session_state.is_solving and st.session_state.solution_steps:
             with st.container(border=True):
                 st.markdown("#### 💡 提問時間")
                 for msg in st.session_state.qa_history[2:]:
-                     with st.chat_message("user" if msg["role"] == "user" else "assistant", avatar="👤" if msg["role"] == "user" else "🦔"):
+                     # 【修改】助手 Avatar 改成 "鳩"
+                     with st.chat_message("user" if msg["role"] == "user" else "assistant", avatar="👤" if msg["role"] == "user" else "鳩"):
                          st.markdown(msg["parts"][0])
                 user_question = st.chat_input("請輸入問題...")
                 if user_question:
@@ -316,7 +362,8 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                         st.markdown(user_question)
                     st.session_state.qa_history.append({"role": "user", "parts": [user_question]})
                     
-                    with st.chat_message("assistant", avatar="🦔"):
+                    # 【修改】助手 Avatar 改成 "鳩"
+                    with st.chat_message("assistant", avatar="鳩"):
                         with st.spinner("思考中..."):
                             try:
                                 full_prompt_text = "以下是對話歷史：\n"
