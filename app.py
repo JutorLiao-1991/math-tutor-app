@@ -26,7 +26,7 @@ def inject_custom_css():
     )
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v4.1 Pro", page_icon="🐦", layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v4.3", page_icon="🐦", layout="centered")
 inject_custom_css()
 
 # --- 初始化 Session State ---
@@ -39,6 +39,7 @@ if 'qa_history' not in st.session_state: st.session_state.qa_history = []
 if 'solve_mode' not in st.session_state: st.session_state.solve_mode = "verbal"
 if 'data_saved' not in st.session_state: st.session_state.data_saved = False
 if 'plot_code' not in st.session_state: st.session_state.plot_code = None
+if 'use_pro_model' not in st.session_state: st.session_state.use_pro_model = False
 
 # --- 函數區 ---
 def stream_text(text):
@@ -70,7 +71,6 @@ def save_to_google_sheets(grade, mode, image_desc, full_response):
 def execute_and_show_plot(code_snippet):
     try:
         plt.figure(figsize=(6, 4))
-        # 設定繪圖風格
         plt.style.use('seaborn-v0_8-whitegrid') 
         local_scope = {'plt': plt, 'np': np}
         exec(code_snippet, globals(), local_scope)
@@ -79,8 +79,8 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗 (代碼錯誤): {e}")
 
-# --- API 呼叫 (指定使用 2.5 Pro) ---
-def call_gemini_with_rotation(prompt_content, image_input=None):
+# --- API 呼叫 (混合動力版：2.5-Flash vs 2.5-Pro) ---
+def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
     try:
         keys = st.secrets["API_KEYS"]
         if isinstance(keys, str): keys = [keys]
@@ -90,14 +90,18 @@ def call_gemini_with_rotation(prompt_content, image_input=None):
     
     shuffled_keys = keys.copy()
     random.shuffle(shuffled_keys)
+    
+    # 【關鍵修改】根據您的清單選擇模型
+    # Flash: 2.5-flash (快速)
+    # Pro: 2.5-pro (清單中最強)
+    model_name = 'models/gemini-2.5-pro' if use_pro else 'models/gemini-2.5-flash'
+    
     last_error = None
     
     for key in shuffled_keys:
         try:
             genai.configure(api_key=key)
-            
-            # 【核心修改】使用您清單中最強的 2.5 Pro
-            model = genai.GenerativeModel('models/gemini-2.5-pro')
+            model = genai.GenerativeModel(model_name)
             
             if image_input:
                 response = model.generate_content([prompt_content, image_input])
@@ -105,7 +109,6 @@ def call_gemini_with_rotation(prompt_content, image_input=None):
                 response = model.generate_content(prompt_content)
             return response
         except Exception as e:
-            # 即使付費，如果是瞬時流量過大 (RPM)，輪替機制還是很有用的
             if "429" in str(e) or "Quota" in str(e) or "503" in str(e):
                 last_error = e
                 continue
@@ -121,7 +124,7 @@ with col1:
     else: st.markdown("<h1 style='text-align: center;'>鳩</h1>", unsafe_allow_html=True)
 with col2:
     st.title("鳩特數理ＡＩ小幫手")
-    st.caption("AI 鳩特解題 v4.1 (2.5 Pro 旗艦版)")
+    st.caption("AI 鳩特解題 v4.3 (2.5 雙引擎版)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -142,6 +145,9 @@ if not st.session_state.is_solving:
         st.image(image, caption='題目預覽', use_column_width=True)
         question_target = st.text_input("你想問圖片中的哪一題？", placeholder="例如：第 5 題...")
         
+        # --- Pro 模型開關 ---
+        use_pro = st.checkbox("🔥 啟用 2.5 Pro 深度思考 (適合難題或 Flash 解錯時)", value=False)
+        
         st.markdown("### 🚀 選擇解題模式：")
         col_btn_verbal, col_btn_math = st.columns(2)
         with col_btn_verbal:
@@ -155,11 +161,15 @@ if not st.session_state.is_solving:
             else:
                 mode = "verbal" if start_verbal else "math"
                 st.session_state.solve_mode = mode
-                loading_text = "Jutor Pro (2.5) 正在深度思考 (啟動繪圖引擎)..."
+                st.session_state.use_pro_model = use_pro
+                
+                # 提示使用者目前使用的引擎
+                engine_name = "Jutor 2.5 Pro" if use_pro else "Jutor 2.5 Flash"
+                loading_text = f"{engine_name} 正在啟動繪圖引擎與分析..."
                 
                 with st.spinner(loading_text):
                     try:
-                        # Prompt 指令集
+                        # Prompt
                         guardrail = "【最高防護】非課業相關(自拍/風景)請回傳: REFUSE_OFF_TOPIC"
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
                         formatting = "【排版】文字算式分行。長算式用 `\\\\` 換行。"
@@ -197,7 +207,7 @@ if not st.session_state.is_solving:
                         本題答案 ===STEP=== 【驗收類題】 ===STEP=== 【類題詳解】
                         """
 
-                        response = call_gemini_with_rotation(prompt, image)
+                        response = call_gemini_with_rotation(prompt, image, use_pro=use_pro)
                         
                         if "REFUSE_OFF_TOPIC" in response.text:
                             st.error("🙅‍♂️ 這個學校好像不會考喔！")
@@ -236,7 +246,7 @@ if not st.session_state.is_solving:
 
                     except Exception as e:
                         if "429" in str(e) or "Quota" in str(e): 
-                            st.warning("🥵 系統忙碌中 (High Traffic)...")
+                            st.warning("🥵 系統忙碌中...")
                             st.error("請稍候重試！")
                         else: st.error(f"錯誤：{e}")
 
@@ -245,6 +255,8 @@ if not st.session_state.is_solving:
 if st.session_state.is_solving and st.session_state.solution_steps:
     
     header_text = "🗣️ Jutor 口語教學中" if st.session_state.solve_mode == "verbal" else "🔢 純算式推導中"
+    if st.session_state.use_pro_model:
+        header_text += " (🔥 2.5 Pro)"
     st.subheader(header_text)
     
     # 顯示繪圖
@@ -254,11 +266,13 @@ if st.session_state.is_solving and st.session_state.solution_steps:
 
     # 顯示步驟
     for i in range(st.session_state.step_index):
-        with st.chat_message("assistant", avatar="鳩"):
+        # 【修正】Avatar 改回 Emoji 🐦，避免報錯
+        with st.chat_message("assistant", avatar="🐦"):
             st.markdown(st.session_state.solution_steps[i])
             
     current_step_text = st.session_state.solution_steps[st.session_state.step_index]
-    with st.chat_message("assistant", avatar="鳩"):
+    # 【修正】Avatar 改回 Emoji 🐦
+    with st.chat_message("assistant", avatar="🐦"):
         if not st.session_state.streaming_done:
             trigger_vibration()
             st.write_stream(stream_text(current_step_text))
@@ -300,17 +314,22 @@ if st.session_state.is_solving and st.session_state.solution_steps:
             with st.container(border=True):
                 st.markdown("#### 💡 提問時間")
                 for msg in st.session_state.qa_history[2:]:
-                     with st.chat_message("user" if msg["role"] == "user" else "assistant", avatar="👤" if msg["role"] == "user" else "鳩"):
+                     # 【修正】Avatar 改回 Emoji 🐦
+                     with st.chat_message("user" if msg["role"] == "user" else "assistant", avatar="👤" if msg["role"] == "user" else "🐦"):
                          st.markdown(msg["parts"][0])
                 user_question = st.chat_input("請輸入問題...")
                 if user_question:
                     with st.chat_message("user", avatar="👤"): st.markdown(user_question)
                     st.session_state.qa_history.append({"role": "user", "parts": [user_question]})
-                    with st.chat_message("assistant", avatar="鳩"):
+                    
+                    # 【修正】Avatar 改回 Emoji 🐦
+                    with st.chat_message("assistant", avatar="🐦"):
                         with st.spinner("思考中..."):
                             try:
                                 full_prompt = "對話紀錄:\n" + "\n".join([f"{h['role']}:{h['parts'][0]}" for h in st.session_state.qa_history]) + f"\n新問題:{user_question}"
-                                response = call_gemini_with_rotation(full_prompt)
+                                
+                                # 問答模式也沿用目前的模型選擇 (Pro or Flash)
+                                response = call_gemini_with_rotation(full_prompt, use_pro=st.session_state.use_pro_model)
                                 st.write_stream(stream_text(response.text))
                                 st.session_state.qa_history.append({"role": "model", "parts": [response.text]})
                             except: st.error("忙碌中")
@@ -338,4 +357,5 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.session_state.in_qa_mode = False
                 st.session_state.data_saved = False
                 st.session_state.plot_code = None
+                st.session_state.use_pro_model = False
                 st.rerun()
