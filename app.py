@@ -10,7 +10,9 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import numpy as np
+import requests
 
 # --- 注入自定義 CSS ---
 def inject_custom_css():
@@ -19,29 +21,61 @@ def inject_custom_css():
         <style>
         .katex-html { overflow-x: auto; overflow-y: hidden; max-width: 100%; display: block; padding-bottom: 5px; }
         .stMarkdown { max-width: 100%; overflow-wrap: break-word; }
-        /* 調整頭像大小，避免 Logo 太大或太小 */
         .stChatMessage .stChatMessageAvatar {
-            width: 2.5rem;
-            height: 2.5rem;
+            width: 2.8rem; /* 稍微放大一點頭像 */
+            height: 2.8rem;
+            background-color: #f0f2f6; 
+            border-radius: 50%; /* 讓頭像變圓形 */
+            object-fit: cover;
         }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-# --- 決定頭像 (Logo 優先，Emoji 後補) ---
-# 這樣寫最保險，如果哪天 logo.jpg 不小心被刪掉，程式也不會報錯
-logo_path = "logo.jpg"
-if os.path.exists(logo_path):
-    page_icon_set = Image.open(logo_path) # 瀏覽器分頁圖示
-    assistant_avatar = logo_path          # 聊天室頭像
+# --- 自動下載並設定中文字型 ---
+def configure_chinese_font():
+    font_name = "NotoSansCJKtc-Regular.otf"
+    if not os.path.exists(font_name):
+        # 靜默下載，不印出太多訊息
+        try:
+            url = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf"
+            response = requests.get(url)
+            with open(font_name, 'wb') as f:
+                f.write(response.content)
+        except:
+            pass 
+
+    try:
+        fm.fontManager.addfont(font_name)
+        plt.rcParams['font.family'] = 'Noto Sans CJK TC'
+        plt.rcParams['axes.unicode_minus'] = False
+    except:
+        pass
+
+# --- 圖片與頭像設定邏輯 ---
+# 1. 網站主 Logo (顯示在左上角)
+main_logo_path = "logo.jpg"
+if os.path.exists(main_logo_path):
+    page_icon_set = Image.open(main_logo_path)
 else:
     page_icon_set = "🐦"
+
+# 2. 助手對話頭像 (顯示在對話框)
+# 優先找 avatar.jpg -> 其次找 logo.jpg -> 最後用 Emoji
+avatar_file_path = "avatar.jpg" 
+
+if os.path.exists(avatar_file_path):
+    assistant_avatar = avatar_file_path
+elif os.path.exists(main_logo_path):
+    assistant_avatar = main_logo_path
+else:
     assistant_avatar = "🐦"
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v4.4", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v4.6", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
+configure_chinese_font()
 
 # --- 初始化 Session State ---
 if 'step_index' not in st.session_state: st.session_state.step_index = 0
@@ -81,9 +115,12 @@ def save_to_google_sheets(grade, mode, image_desc, full_response):
         print(f"存檔失敗: {e}")
         return False
 
-# --- 執行 AI 給的繪圖程式碼 ---
 def execute_and_show_plot(code_snippet):
     try:
+        # 重設字型確保中文正常
+        plt.rcParams['font.family'] = 'Noto Sans CJK TC'
+        plt.rcParams['axes.unicode_minus'] = False
+        
         plt.figure(figsize=(6, 4))
         plt.style.use('seaborn-v0_8-whitegrid') 
         local_scope = {'plt': plt, 'np': np}
@@ -91,9 +128,8 @@ def execute_and_show_plot(code_snippet):
         st.pyplot(plt)
         plt.close()
     except Exception as e:
-        st.warning(f"圖形繪製失敗 (代碼錯誤): {e}")
+        st.warning(f"圖形繪製失敗: {e}")
 
-# --- API 呼叫 (混合動力版) ---
 def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
     try:
         keys = st.secrets["API_KEYS"]
@@ -115,7 +151,6 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
         try:
             genai.configure(api_key=key)
             model = genai.GenerativeModel(model_name)
-            
             if image_input:
                 response = model.generate_content([prompt_content, image_input])
             else:
@@ -133,14 +168,14 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
 
 col1, col2 = st.columns([1, 4]) 
 with col1:
-    # 這裡顯示大張的 Logo 圖片
-    if os.path.exists("logo.jpg"): 
-        st.image("logo.jpg", use_column_width=True)
+    # 這裡始終顯示主 Logo
+    if os.path.exists(main_logo_path): 
+        st.image(main_logo_path, use_column_width=True)
     else: 
         st.markdown("<h1 style='text-align: center;'>鳩</h1>", unsafe_allow_html=True)
 with col2:
     st.title("鳩特數理ＡＩ小幫手")
-    st.caption("AI 鳩特解題 v4.4 (Logo 版)")
+    st.caption("AI 鳩特解題 v4.6 (獨立頭像版)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -161,7 +196,6 @@ if not st.session_state.is_solving:
         st.image(image, caption='題目預覽', use_column_width=True)
         question_target = st.text_input("你想問圖片中的哪一題？", placeholder="例如：第 5 題...")
         
-        # --- Pro 模型開關 ---
         use_pro = st.checkbox("🔥 啟用 2.5 Pro 深度思考 (適合難題或 Flash 解錯時)", value=False)
         
         st.markdown("### 🚀 選擇解題模式：")
@@ -184,17 +218,15 @@ if not st.session_state.is_solving:
                 
                 with st.spinner(loading_text):
                     try:
-                        # Prompt
                         guardrail = "【最高防護】非課業相關(自拍/風景)請回傳: REFUSE_OFF_TOPIC"
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
                         formatting = "【排版】文字算式分行。長算式用 `\\\\` 換行。"
-                        
                         plotting = """
                         【繪圖能力啟動】
                         如果題目涉及「函數圖形」或「幾何座標」，請產生 Python 程式碼 (matplotlib + numpy)。
                         1. 程式碼必須能直接執行。
                         2. 必須包在 `===PLOT===` 與 `===PLOT_END===` 之間。
-                        3. 圖表請盡量美觀，標註座標軸。
+                        3. 圖表標題、座標軸若有中文，請直接使用中文(不用擔心字型問題，後台已設定好)。
                         """
 
                         common_role = f"角色：你是 Jutor。年級：{selected_grade}。題目：{question_target}。"
@@ -208,7 +240,6 @@ if not st.session_state.is_solving:
                         {transcription}
                         {formatting}
                         {plotting}
-                        
                         {common_role}
                         {style}
 
@@ -228,15 +259,12 @@ if not st.session_state.is_solving:
                             st.error("🙅‍♂️ 這個學校好像不會考喔！")
                         else:
                             full_text = response.text
-                            
-                            # 1. 提取描述
                             image_desc = "無描述"
                             desc_match = re.search(r"===DESC===(.*?)===DESC_END===", full_text, re.DOTALL)
                             if desc_match:
                                 image_desc = desc_match.group(1).strip()
                                 full_text = full_text.replace(desc_match.group(0), "")
 
-                            # 2. 提取繪圖代碼
                             plot_code = None
                             plot_match = re.search(r"===PLOT===(.*?)===PLOT_END===", full_text, re.DOTALL)
                             if plot_match:
@@ -246,7 +274,6 @@ if not st.session_state.is_solving:
                             
                             st.session_state.plot_code = plot_code
                             
-                            # 3. 處理步驟
                             raw_steps = full_text.split("===STEP===")
                             st.session_state.solution_steps = [step.strip() for step in raw_steps if step.strip()]
                             st.session_state.step_index = 0
@@ -274,19 +301,16 @@ if st.session_state.is_solving and st.session_state.solution_steps:
         header_text += " (🔥 2.5 Pro)"
     st.subheader(header_text)
     
-    # 顯示繪圖
     if st.session_state.plot_code:
         with st.expander("📊 查看幾何/函數圖形 (AI 繪製)", expanded=True):
             execute_and_show_plot(st.session_state.plot_code)
 
-    # 顯示步驟
     for i in range(st.session_state.step_index):
-        # 【修改】使用 assistant_avatar 變數 (Logo 圖片)
+        # 這裡會讀取新的 avatar.jpg
         with st.chat_message("assistant", avatar=assistant_avatar):
             st.markdown(st.session_state.solution_steps[i])
             
     current_step_text = st.session_state.solution_steps[st.session_state.step_index]
-    # 【修改】使用 assistant_avatar 變數
     with st.chat_message("assistant", avatar=assistant_avatar):
         if not st.session_state.streaming_done:
             trigger_vibration()
@@ -295,7 +319,6 @@ if st.session_state.is_solving and st.session_state.solution_steps:
         else:
             st.markdown(current_step_text)
 
-    # 按鈕控制
     total_steps = len(st.session_state.solution_steps)
     if st.session_state.step_index < total_steps - 1:
         if not st.session_state.in_qa_mode:
@@ -329,10 +352,10 @@ if st.session_state.is_solving and st.session_state.solution_steps:
             with st.container(border=True):
                 st.markdown("#### 💡 提問時間")
                 for msg in st.session_state.qa_history[2:]:
-                     # 判斷是使用者還是助手
-                     if msg["role"] == "user":
+                     if msg["role"] == "user": 
                          icon = "👤"
-                     else:
+                     else: 
+                         # 這裡也會讀取新的 avatar.jpg
                          icon = assistant_avatar
                      
                      with st.chat_message(msg["role"], avatar=icon):
@@ -343,12 +366,10 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                     with st.chat_message("user", avatar="👤"): st.markdown(user_question)
                     st.session_state.qa_history.append({"role": "user", "parts": [user_question]})
                     
-                    # 【修改】使用 assistant_avatar 變數
                     with st.chat_message("assistant", avatar=assistant_avatar):
                         with st.spinner("思考中..."):
                             try:
                                 full_prompt = "對話紀錄:\n" + "\n".join([f"{h['role']}:{h['parts'][0]}" for h in st.session_state.qa_history]) + f"\n新問題:{user_question}"
-                                
                                 response = call_gemini_with_rotation(full_prompt, use_pro=st.session_state.use_pro_model)
                                 st.write_stream(stream_text(response.text))
                                 st.session_state.qa_history.append({"role": "model", "parts": [response.text]})
