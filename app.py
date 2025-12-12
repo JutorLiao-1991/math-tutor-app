@@ -73,7 +73,7 @@ else:
 assistant_avatar = "🦔" 
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v5.0", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v5.1", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 
 # --- 啟動時執行字型設定 ---
@@ -195,7 +195,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理 AI 夥伴")
-    st.caption("Jutor AI 教學系統 v5.0 (Powered by Gemini 2.5)")
+    st.caption("Jutor AI 教學系統 v5.1 (Powered by Gemini 2.5)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -251,12 +251,15 @@ if not st.session_state.is_solving:
                         guardrail = "【最高防護】非課業相關(自拍/風景)請回傳: REFUSE_OFF_TOPIC"
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
                         formatting = "【排版】文字算式分行。長算式用 `\\\\` 換行。"
+                        
+                        # --- 修正重點：加強繪圖提示詞，防止 LaTeX 簡寫報錯 ---
                         plotting = """
                         【繪圖能力啟動】
                         如果題目涉及「函數圖形」或「幾何座標」，請產生 Python 程式碼 (matplotlib + numpy)。
                         1. 程式碼必須能直接執行。
                         2. 必須包在 `===PLOT===` 與 `===PLOT_END===` 之間。
                         3. 圖表標題、座標軸請使用中文。
+                        4. ⚠️ 嚴格 LaTeX 規範：Python 字串請用 raw string (r'...')。分數務必寫成 r'$\frac{a}{b}$' (必加括號)，禁止使用 \frac a b 這種簡寫，否則會報錯。
                         """
 
                         common_role = f"角色：你是 Jutor。年級：{selected_grade}。題目：{question_target}。"
