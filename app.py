@@ -37,17 +37,13 @@ def inject_custom_css():
 
         /* --- 手機版 RWD 優化 (針對寬度小於 600px 的裝置) --- */
         @media only screen and (max-width: 600px) {
-            /* 縮小內文文字，接近 Gemini 原生體驗 */
             .stMarkdown p, .stMarkdown li, .stMarkdown div, .stChatMessage p {
                 font-size: 15px !important;
                 line-height: 1.6 !important;
             }
-            /* 縮小標題 */
             h1 { font-size: 1.6rem !important; }
             h2 { font-size: 1.4rem !important; }
             h3 { font-size: 1.2rem !important; }
-            
-            /* 讓數學式 (LaTeX) 在手機上不要太大 */
             .katex { font-size: 1.1em !important; }
         }
         </style>
@@ -108,7 +104,7 @@ else:
 assistant_avatar = "🦔" 
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v6.7", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v6.8", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 CORRECT_FONT_NAME = configure_chinese_font()
 
@@ -151,11 +147,11 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 【強力排版修復 v3】針對三明治斷行與多選題 ---
+# --- 【強力排版修復 v3.1】修正數學顯示 ---
 def clean_output_format(text):
     if not text: return text
     
-    # 1. 暴力降維: $$...$$ -> $...$ (除非長度很長)
+    # 1. 暴力降維: $$...$$ -> $...$
     def block_to_inline(match):
         content = match.group(1)
         if len(content) < 50 and '\\\\' not in content and 'align' not in content:
@@ -167,16 +163,10 @@ def clean_output_format(text):
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
 
-    # 3. 【中文黏合劑】
-    # 這是最強力的一招：只要看到 "中文 \n 短內容 \n 中文"，就強制殺掉換行
-    # 短內容包含：數字、變數、短 LaTeX
-    
+    # 3. 中文黏合劑
     cjk = r'[\u4e00-\u9fa5]'
-    # 短內容: 非換行字元，長度 1~30
     short_content = r'(?:(?!\n|•|- |\* ).){1,30}' 
     
-    # 前後都是中文/標點，中間夾著換行與短內容 -> 黏起來
-    # 執行兩次確保連續斷行被修復
     for _ in range(2):
         pattern = f'(?<={cjk})\s*\\n+\s*({short_content})\s*\\n+\s*(?={cjk}|[，。！？：,.?])'
         text = re.sub(pattern, r' \1 ', text)
@@ -231,7 +221,7 @@ with col1:
 with col2:
     st.title("鳩特數理 AI 夥伴")
     # 更新時間戳記
-    st.caption("Jutor AI 教學系統 v6.7 (手機優化+多選支援 12/12)")
+    st.caption("Jutor AI 教學系統 v6.8 (數學顯示修復版 20:20)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -286,11 +276,14 @@ if not st.session_state.is_solving:
 
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
                         
+                        # --- 修正重點 1：數學排版格式指令 (禁止程式碼風格) ---
                         formatting = """
                         【排版嚴格指令】
-                        1. **數值與變數不換行**：純數字(如 288, -34)、變數(如 x, y)、短式子(如 a=1)必須使用行內格式(Inline)，**嚴禁換行**，必須與前後中文緊密相連。
-                        2. **列表控制**：除非是列舉不同選項，否則不要使用 Bullet Points 來顯示單一數值。
-                        3. **直式計算**：只有在長算式推導時，才使用換行對齊。
+                        1. **嚴禁程式碼風格**：解說中的數學式**必須**使用 LaTeX 語法。
+                           - ❌ 錯誤：`frac{x^2}{2}` (缺反斜線)、`20 * 5` (用星號)、`x^2` (未渲染)
+                           - ✅ 正確：`\\frac{x^2}{2}`、`20 \\times 5`、`$x^2$`
+                        2. **行內數學**：所有單獨的變數或短算式，必須用 `$ ... $` 包裹 (Inline Math)。禁止使用反引號 (Code Block) 來顯示算式。
+                        3. **數值不換行**：純數字、變數必須緊跟在文字後，嚴禁換行。
                         """
                         
                         plotting = """
@@ -308,7 +301,6 @@ if not st.session_state.is_solving:
                         else:
                             style = "風格：純算式、LaTeX、極簡。"
 
-                        # --- 修正重點：加入「多選題」判斷邏輯 ---
                         prompt = f"""
                         {guardrail}
                         {transcription}
@@ -319,8 +311,7 @@ if not st.session_state.is_solving:
                         
                         【題型辨識重要指令】
                         1. 請先判斷題目是否為 **「多選題」** (Multiple Choice)。
-                        2. 若題目包含「選出正確選項」、「下列何者正確」或有 (1)(2)(3)(4)(5) 等多個選項，**請務必假設可能有多個正確答案**。
-                        3. 請逐一分析每個選項的正確性，不要找到一個對的就停止。
+                        2. 若有 (1)(2)(3)(4)(5) 等選項，**請務必假設可能有多個正確答案**，並逐一檢查。
 
                         結構要求：
                         (描述) ===DESC=== ... ===DESC_END===
@@ -399,7 +390,6 @@ if st.session_state.is_solving and st.session_state.solution_steps:
             
     current_step_text = st.session_state.solution_steps[st.session_state.step_index]
     with st.chat_message("assistant", avatar=assistant_avatar):
-        # 直接顯示，不使用打字機，避免 LaTeX 閃爍
         trigger_vibration()
         st.markdown(current_step_text)
 
