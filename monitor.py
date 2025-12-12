@@ -48,42 +48,44 @@ data = load_data_raw()
 
 st.markdown("### 📈 用量分析 (Analytics)")
 
-key_usage_counter = Counter() # 用來統計 Key 使用次數
+key_usage_counter = Counter()
 
 if data:
     today_count = 0
     grade_counter = Counter()
     hour_counter = {i: 0 for i in range(24)}
+    
+    # 這裡的 today_str 是台灣時間的今天
     today_str = current_time.strftime("%Y-%m-%d")
     last_active_time = "無"
 
     for row in data:
-        keys_in_row = list(row.keys())
-        timestamp_str = str(row[keys_in_row[0]])
-        grade = str(row[keys_in_row[1]])
-        
-        # 嘗試讀取最後一欄的 Key 資訊 (假設我們剛加的 app.py 會寫在最後)
-        # 如果是舊資料可能沒有這一欄，用 get 避免報錯
-        # 假設最後一欄的 key 名稱是 "key_info" 或是我們自己 append 上去的
-        # gspread get_all_records 會把第一列當標題
-        # 如果你的 Sheet 第一列還沒加標題，可能會抓不到，但 append_row 還是會寫進去
-        # 這裡用 values 的最後一個值來猜測
-        
         row_values = list(row.values())
-        # 簡單判定：如果最後一個值長度是 4 (例如 "1a2b")，那大概就是 key suffix
-        possible_key = str(row_values[-1])
-        if len(possible_key) == 4:
-            key_usage_counter[possible_key] += 1
-
-        try:
-            dt_obj = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-            if dt_obj.strftime("%Y-%m-%d") == today_str:
-                today_count += 1
-                grade_counter[grade] += 1
-                hour_counter[dt_obj.hour] += 1
-                last_active_time = dt_obj.strftime("%H:%M")
-        except ValueError:
-            continue
+        if len(row_values) > 0:
+            possible_key = str(row_values[-1])
+            if len(possible_key) == 4:
+                key_usage_counter[possible_key] += 1
+        
+        keys_in_row = list(row.keys())
+        if len(keys_in_row) >= 2:
+            timestamp_str = str(row[keys_in_row[0]])
+            grade = str(row[keys_in_row[1]])
+            
+            try:
+                # 假設 Sheet 裡的資料是 UTC (因為 app.py 在 Cloud 上跑 datetime.now() 是 UTC)
+                # 所以我們讀出來後，要加 8 小時才是台灣時間
+                dt_utc = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                dt_tw = dt_utc + timedelta(hours=8)
+                
+                # 用台灣時間來判斷是不是「今天」
+                if dt_tw.strftime("%Y-%m-%d") == today_str:
+                    today_count += 1
+                    grade_counter[grade] += 1
+                    # 這裡統計的小時，就是台灣時間的小時了
+                    hour_counter[dt_tw.hour] += 1
+                    last_active_time = dt_tw.strftime("%H:%M")
+            except ValueError:
+                continue
 
     daily_requests = today_count
     estimated_tokens = daily_requests * 1200 
@@ -102,13 +104,13 @@ if data:
     col_chart1, col_chart2 = st.columns(2)
     
     with col_chart1:
-        st.markdown("#### 🕐 今日提問熱點 (小時)")
+        st.markdown("#### 🕐 今日提問熱點 (台灣時間)")
         if today_count > 0:
             hours = list(hour_counter.keys())
             counts = list(hour_counter.values())
             fig1, ax1 = plt.subplots(figsize=(5, 3))
             ax1.bar(hours, counts, color='skyblue')
-            ax1.set_xlabel('Hour', fontproperties=font_prop)
+            ax1.set_xlabel('Hour (0-23)', fontproperties=font_prop)
             ax1.set_ylabel('Count', fontproperties=font_prop)
             ax1.set_xticks(range(0, 24, 2))
             ax1.grid(axis='y', linestyle='--', alpha=0.5)
@@ -166,9 +168,6 @@ if st.button("🚀 啟動全系統掃描", type="primary"):
         
         for i, key in enumerate(target_keys):
             masked_key = f"...{key[-4:]}"
-            
-            # --- 取得這把 Key 的歷史使用次數 ---
-            # 從前面統計的 key_usage_counter 拿資料
             usage_count = key_usage_counter.get(key[-4:], 0)
             
             try:
@@ -204,9 +203,7 @@ if st.button("🚀 啟動全系統掃描", type="primary"):
                 elif color == "red": st.error(status)
                 else: st.warning(status)
             with c3: st.caption(detail)
-            with c4: 
-                # 顯示歷史使用次數
-                st.info(f"累計使用: {usage_count} 次")
+            with c4: st.info(f"累計使用: {usage_count} 次")
             
             time.sleep(0.2)
             
