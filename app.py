@@ -40,17 +40,12 @@ def inject_custom_css():
 
 # --- 【新版】字型設定：直接讀取本地檔案 ---
 def configure_chinese_font():
-    # 使用你上傳到 Github 的檔案
     font_file = "NotoSansTC-Regular.ttf"
-    
     if os.path.exists(font_file):
         try:
-            # 註冊字體
             fm.fontManager.addfont(font_file)
             prop = fm.FontProperties(fname=font_file)
             font_name = prop.get_name()
-            
-            # 設定 Matplotlib 預設
             plt.rcParams['font.family'] = font_name
             plt.rcParams['axes.unicode_minus'] = False 
             return font_name
@@ -58,25 +53,19 @@ def configure_chinese_font():
             print(f"字體載入錯誤: {e}")
             return "sans-serif"
     else:
-        # 如果真的找不到檔案，回退到系統預設
         return "sans-serif"
 
 # --- 圖片與頭像設定 ---
 main_logo_path = "logo.jpg"
-# 1. 設定瀏覽器分頁圖示 (優先用圖片)
 if os.path.exists(main_logo_path):
     page_icon_set = Image.open(main_logo_path)
 else:
     page_icon_set = "🦔"
-
-# 2. 設定 AI 對話頭像 (維持刺蝟)
 assistant_avatar = "🦔" 
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v5.3", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v5.5", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
-
-# --- 啟動時執行字型設定 ---
 CORRECT_FONT_NAME = configure_chinese_font()
 
 # --- 初始化 Session State ---
@@ -90,7 +79,7 @@ if 'solve_mode' not in st.session_state: st.session_state.solve_mode = "verbal"
 if 'data_saved' not in st.session_state: st.session_state.data_saved = False
 if 'plot_code' not in st.session_state: st.session_state.plot_code = None
 if 'use_pro_model' not in st.session_state: st.session_state.use_pro_model = False
-if 'trigger_rescue' not in st.session_state: st.session_state.trigger_rescue = False 
+if 'trigger_rescue' not in st.session_state: st.session_state.trigger_rescue = False
 
 # --- 函數區 ---
 def stream_text(text):
@@ -118,29 +107,21 @@ def save_to_google_sheets(grade, mode, image_desc, full_response):
         print(f"存檔失敗: {e}")
         return False
 
-# --- 執行繪圖 (加入強制字型設定) ---
 def execute_and_show_plot(code_snippet):
     try:
-        # 在每次畫圖前，再次強制指定正確的字型名稱
         plt.rcParams['font.family'] = CORRECT_FONT_NAME
         plt.rcParams['axes.unicode_minus'] = False
-        
         plt.figure(figsize=(6, 4))
         plt.style.use('seaborn-v0_8-whitegrid') 
-        
         local_scope = {'plt': plt, 'np': np}
         exec(code_snippet, globals(), local_scope)
-        
-        # 再次確保 title/label 沒被程式碼覆蓋成預設字體 (Safe guard)
         ax = plt.gca()
         if ax.get_title(): ax.set_title(ax.get_title(), fontname=CORRECT_FONT_NAME)
         if ax.get_xlabel(): ax.set_xlabel(ax.get_xlabel(), fontname=CORRECT_FONT_NAME)
         if ax.get_ylabel(): ax.set_ylabel(ax.get_ylabel(), fontname=CORRECT_FONT_NAME)
-        # 圖例字體
         legend = ax.get_legend()
         if legend:
             plt.setp(legend.get_texts(), fontname=CORRECT_FONT_NAME)
-
         st.pyplot(plt)
         plt.close()
     except Exception as e:
@@ -154,16 +135,13 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
         st.error("API_KEYS 設定錯誤")
         st.stop()
     
-    # --- 關鍵修正：確保順序不被打亂 ---
-    # 移除 random.shuffle，確保依序使用 (免費優先 -> 付費在後)
+    # 確保順序：免費優先 -> 付費在後
     target_keys = keys.copy()
-    # random.shuffle(target_keys) # <--- 已移除隨機洗牌
     
-    # --- 使用 Gemini 2.5 模型 ---
     if use_pro:
-        model_name = 'models/gemini-2.5-pro'   # 救援模式
+        model_name = 'models/gemini-2.5-pro'
     else:
-        model_name = 'models/gemini-2.5-flash' # 一般模式
+        model_name = 'models/gemini-2.5-flash'
     
     last_error = None
     
@@ -188,7 +166,6 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
 
 col1, col2 = st.columns([1, 4]) 
 with col1:
-    # --- 優先顯示 Logo 圖片 ---
     if os.path.exists(main_logo_path):
         st.image(main_logo_path, use_column_width=True)
     else:
@@ -196,8 +173,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理 AI 夥伴")
-    # --- 更新時間戳記 (含時間) ---
-    st.caption("Jutor AI 教學系統 v5.3 (更新時間: 2025/12/12 17:03)")
+    st.caption("Jutor AI 教學系統 v5.5 (更新時間: 2025/12/12 17:30)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -209,7 +185,6 @@ with col_grade_select:
 st.markdown("---")
 
 # --- 上傳區 ---
-# 如果不在解題中，顯示上傳介面
 if not st.session_state.is_solving:
     st.subheader("📸 1️⃣ 上傳題目 & 指定")
     uploaded_file = st.file_uploader("選擇圖片 (JPG, PNG)", type=["jpg", "png", "jpeg"], label_visibility="collapsed")
@@ -231,7 +206,6 @@ if not st.session_state.is_solving:
             if not question_target:
                 st.warning("⚠️ 請先輸入你想問哪一題！")
             else:
-                # 設定模式
                 if st.session_state.trigger_rescue:
                     mode = st.session_state.solve_mode
                     use_pro = True 
@@ -250,11 +224,23 @@ if not st.session_state.is_solving:
                 
                 with st.spinner(loading_text):
                     try:
-                        guardrail = "【最高防護】非課業相關(自拍/風景)請回傳: REFUSE_OFF_TOPIC"
+                        # --- 防護網回歸單純版 ---
+                        guardrail = "【過濾機制】請辨識圖片內容。若明顯為「自拍照、風景照、寵物照」等與學習無關的圖片，請回傳 REFUSE_OFF_TOPIC。若是數學題目、文字截圖、圖表分析，即使模糊或非典型格式，也請回答。"
+
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
-                        formatting = "【排版】文字算式分行。長算式用 `\\\\` 換行。"
                         
-                        # --- 修正重點：加強繪圖提示詞，防止報錯，防止濫畫 ---
+                        # --- 修正重點 1：排版指令優化 (直式計算) ---
+                        formatting = """
+                        【排版嚴格要求】
+                        1. 遇到計算過程，嚴禁將多個等號寫在同一行。
+                        2. 必須使用「直式計算」排版，每個等號前請務必換行。
+                        3. 範例：
+                           y = 2x + 1
+                           = 2(3) + 1
+                           = 7
+                        4. 若使用 LaTeX，請用 aligned 環境或 \\\\ 換行。
+                        """
+                        
                         plotting = """
                         【繪圖能力啟動】
                         1. 只有當題目明確涉及「函數圖形」、「幾何座標」、「統計圖表」時，才生成 Python 程式碼 (matplotlib)。若為純代數運算，請勿繪圖，不要輸出 ===PLOT=== 區塊。
@@ -270,6 +256,7 @@ if not st.session_state.is_solving:
                         else:
                             style = "風格：純算式、LaTeX、極簡。"
 
+                        # --- 修正重點 2：類題部分僅要求答案 ---
                         prompt = f"""
                         {guardrail}
                         {transcription}
@@ -285,13 +272,13 @@ if not st.session_state.is_solving:
                         確認題目 ===STEP===
                         解題過程(每一步STEP分隔) ===STEP===
                         ...
-                        本題答案 ===STEP=== 【驗收類題】 ===STEP=== 【類題詳解】
+                        本題答案 ===STEP=== ### 🎯 驗收類題 ===STEP=== 🗝️ 類題答案 (僅提供最終數值/答案，不需過程)
                         """
 
                         response = call_gemini_with_rotation(prompt, image, use_pro=use_pro)
                         
                         if "REFUSE_OFF_TOPIC" in response.text:
-                            st.error("🙅‍♂️ 這個學校好像不會考喔！")
+                            st.error("🙅‍♂️ 這個學校好像不會考喔！(若為誤判，請嘗試裁切圖片)")
                         else:
                             full_text = response.text
                             image_desc = "無描述"
@@ -339,7 +326,6 @@ if st.session_state.is_solving and st.session_state.solution_steps:
         st.markdown(f"### {header_text}") 
     
     if st.session_state.plot_code:
-        # --- 修正文字：拿掉 (AI 繪製) ---
         with st.expander("📊 查看幾何/函數圖形", expanded=True):
             execute_and_show_plot(st.session_state.plot_code)
 
@@ -418,7 +404,6 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.button("👌 回到主流程", on_click=exit_qa_mode, use_container_width=True)
 
     else:
-        # --- 最終頁面 ---
         st.markdown("---")
         st.success("🎉 恭喜完成！")
         col_end_back, col_end_reset = st.columns([1, 2])
@@ -439,7 +424,6 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.session_state.use_pro_model = False
                 st.rerun()
 
-        # --- 救援按鈕 (只有在看完最後一頁時才出現) ---
         if not st.session_state.use_pro_model:
             st.markdown("")
             st.markdown("")
