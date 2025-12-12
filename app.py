@@ -36,7 +36,7 @@ def inject_custom_css():
         unsafe_allow_html=True,
     )
 
-# --- 優化：快取字體設定 ---
+# --- 快取字體設定 ---
 @st.cache_resource
 def configure_chinese_font():
     font_file = "NotoSansTC-Regular.ttf"
@@ -53,7 +53,7 @@ def configure_chinese_font():
     else:
         return "sans-serif"
 
-# --- 優化：快取 Google Sheets 連線 ---
+# --- 快取 Google Sheets 連線 ---
 @st.cache_resource
 def get_google_sheet_client():
     try:
@@ -89,7 +89,7 @@ else:
 assistant_avatar = "🦔" 
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v6.0", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v6.1", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 CORRECT_FONT_NAME = configure_chinese_font()
 
@@ -111,8 +111,7 @@ if 'used_key_suffix' not in st.session_state: st.session_state.used_key_suffix =
 def stream_text(text):
     for char in text:
         yield char
-        # 保留打字機效果，速度微調
-        time.sleep(0.01)
+        time.sleep(0.01) # 打字機效果
 
 def trigger_vibration():
     vibrate_js = """<script>if(navigator.vibrate){navigator.vibrate(30);}</script>"""
@@ -138,40 +137,49 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 【關鍵修改】排版強力膠水 ---
+# --- 【核心修正】排版手術刀 ---
 def clean_output_format(text):
     """
-    修復 AI 生成的排版問題：
-    1. 黏合標點符號。
-    2. 黏合被斷行的短數字、變數、負數。
+    強力修復 AI 生成的排版問題，特別是針對「三明治斷行」。
     """
     if not text: return text
     
-    # 1. 處理標點符號單獨成行 (黏回上一行)
+    # 1. 將短的 Block Math $$x$$ 轉為 Inline Math $x$
+    # 防止 AI 用區塊模式顯示單一變數導致換行
+    def block_to_inline(match):
+        content = match.group(1)
+        # 如果內容很短(小於20字)且沒有換行符，就轉為 inline
+        if len(content) < 20 and '\\\\' not in content:
+            return f"${content}$"
+        return match.group(0)
+    
+    text = re.sub(r'\$\$([^\n]+?)\$\$', block_to_inline, text)
+
+    # 2. 處理標點符號單獨成行 (黏回上一行)
+    # \n + 空白 + 標點
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
     
-    # 2. 【強力膠水】處理「三明治斷行」
-    # 偵測模式：中文/文字 -> 換行 -> (短內容) -> 換行 -> 中文/文字
-    # 短內容包括：
-    #   - 純數字 (288)
-    #   - 負數 (-34)
-    #   - 變數 (x, y, n)
-    #   - 簡單 LaTeX ($x$, $-34$, $2\pi$)
+    # 3. 【三明治修復術】處理：中文 -> 換行 -> 短數值/變數 -> 換行 -> 中文/標點
+    # 這會把中間的換行全殺掉，變成一行
     
-    # 正則表達式解釋：
-    # (?<=[^\n]) : 前面不是換行符
-    # \n\s* : 換行 + 空白
-    # (...) : 捕捉中間的短內容 (數字、變數、LaTeX)
-    # \s*\n : 空白 + 換行
-    # (?=[^\n]) : 後面不是換行符
+    # CJK (中文) 範圍
+    cjk = r'[\u4e00-\u9fa5]'
+    # 內容 (數字、變數、短 LaTeX)
+    # [-]?\d+ : 整數或負數 (如 288, -34)
+    # [a-zA-Z] : 單一字母 (如 x)
+    # \$[^$\n]+\$ : Inline LaTeX (如 $x$)
+    content = r'(?:[-]?\d+|[a-zA-Z]|\$[^$\n]+\$)'
+    # 結尾 (中文或標點)
+    end_char = r'[\u4e00-\u9fa5，。、！？：,.?]'
     
-    # 針對純數字與變數 (如 288, -34, x, y)
-    pattern_num_var = r'(?<=[^\n])\n\s*([-]?\d+|[a-zA-Z])\s*\n(?=[^\n])'
-    text = re.sub(pattern_num_var, r' \1 ', text)
+    # 組合 Regex: (前文) \n (內容) \n (後文)
+    pattern = f'({cjk})\s*\\n\s*({content})\s*\\n\s*({end_char})'
     
-    # 針對行內 LaTeX (如 $x$, $-34$)
-    pattern_latex = r'(?<=[^\n])\n\s*(\$[^$\n]+\$)\s*\n(?=[^\n])'
-    text = re.sub(pattern_latex, r' \1 ', text)
+    # 替換為: 前文 + 空白 + 內容 + 空白 + 後文 (空白是為了美觀，標點前會再修)
+    text = re.sub(pattern, r'\1 \2 \3', text)
+    
+    # 4. 再次修復標點前的多餘空白 (上面黏合時可能會產生)
+    text = re.sub(r'\s+([，。、！？：,.?])', r'\1', text)
 
     return text
 
@@ -222,7 +230,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理 AI 夥伴")
-    st.caption("Jutor AI 教學系統 v6.0 (排版修復版 18:25)")
+    st.caption("Jutor AI 教學系統 v6.1 (排版修復版 18:45)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -281,9 +289,9 @@ if not st.session_state.is_solving:
                         formatting = """
                         【排版嚴格指令 - 關於數值與變數】
                         1. **絕對禁止**將純數字(如 288, -34)、變數(如 x, y)或極短的式子(如 a=1)獨立成一行。
-                        2. 這些數值**必須**跟隨在前後文字之間 (Inline)。
-                           - 錯誤：係數是 \n -34 \n 。
-                           - 正確：係數是 -34 。
+                        2. 這些數值**必須**跟隨在前後文字之間 (Inline Mode)。
+                           - 錯誤範例：係數是 \n -34 \n 。
+                           - 正確範例：係數是 -34 。
                         3. 單純數值或變數，請直接書寫或使用 `$x$` (一個錢字號)，**嚴禁**使用 `$$x$$` (兩個錢字號)，因為那會強制換行。
                         4. 只有在「多行計算過程」時，才使用 `$$ ... $$` 或 `aligned` 環境進行換行對齊。
                         """
@@ -327,7 +335,7 @@ if not st.session_state.is_solving:
                         if "REFUSE_OFF_TOPIC" in response.text:
                             st.error("🙅‍♂️ 這個學校好像不會考喔！(若為誤判，請嘗試裁切圖片)")
                         else:
-                            # 套用強力膠水函式
+                            # 套用強力修復函式
                             full_text = clean_output_format(response.text)
                             
                             image_desc = "無描述"
