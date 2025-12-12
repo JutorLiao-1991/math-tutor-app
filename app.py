@@ -89,7 +89,7 @@ else:
 assistant_avatar = "🦔" 
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v6.1", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v6.3", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 CORRECT_FONT_NAME = configure_chinese_font()
 
@@ -111,7 +111,7 @@ if 'used_key_suffix' not in st.session_state: st.session_state.used_key_suffix =
 def stream_text(text):
     for char in text:
         yield char
-        time.sleep(0.01) # 打字機效果
+        time.sleep(0.01)
 
 def trigger_vibration():
     vibrate_js = """<script>if(navigator.vibrate){navigator.vibrate(30);}</script>"""
@@ -137,49 +137,30 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 【核心修正】排版手術刀 ---
+# --- 【重砲修正】排版強制整形 ---
 def clean_output_format(text):
-    """
-    強力修復 AI 生成的排版問題，特別是針對「三明治斷行」。
-    """
     if not text: return text
     
-    # 1. 將短的 Block Math $$x$$ 轉為 Inline Math $x$
-    # 防止 AI 用區塊模式顯示單一變數導致換行
+    # 1. Block Math 轉 Inline Math
     def block_to_inline(match):
         content = match.group(1)
-        # 如果內容很短(小於20字)且沒有換行符，就轉為 inline
-        if len(content) < 20 and '\\\\' not in content:
-            return f"${content}$"
+        if len(content) < 40 and '\\\\' not in content and 'align' not in content:
+            return f"${content.strip()}$"
         return match.group(0)
-    
-    text = re.sub(r'\$\$([^\n]+?)\$\$', block_to_inline, text)
+    text = re.sub(r'\$\$([\s\S]*?)\$\$', block_to_inline, text)
 
-    # 2. 處理標點符號單獨成行 (黏回上一行)
-    # \n + 空白 + 標點
-    text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
-    
-    # 3. 【三明治修復術】處理：中文 -> 換行 -> 短數值/變數 -> 換行 -> 中文/標點
-    # 這會把中間的換行全殺掉，變成一行
-    
-    # CJK (中文) 範圍
+    # 2. 括號縫合
+    text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
+
+    # 3. 三明治強力膠 v2
     cjk = r'[\u4e00-\u9fa5]'
-    # 內容 (數字、變數、短 LaTeX)
-    # [-]?\d+ : 整數或負數 (如 288, -34)
-    # [a-zA-Z] : 單一字母 (如 x)
-    # \$[^$\n]+\$ : Inline LaTeX (如 $x$)
-    content = r'(?:[-]?\d+|[a-zA-Z]|\$[^$\n]+\$)'
-    # 結尾 (中文或標點)
-    end_char = r'[\u4e00-\u9fa5，。、！？：,.?]'
-    
-    # 組合 Regex: (前文) \n (內容) \n (後文)
-    pattern = f'({cjk})\s*\\n\s*({content})\s*\\n\s*({end_char})'
-    
-    # 替換為: 前文 + 空白 + 內容 + 空白 + 後文 (空白是為了美觀，標點前會再修)
-    text = re.sub(pattern, r'\1 \2 \3', text)
-    
-    # 4. 再次修復標點前的多餘空白 (上面黏合時可能會產生)
-    text = re.sub(r'\s+([，。、！？：,.?])', r'\1', text)
+    short_content = r'(?:(?!\n|•|- |\* ).){1,25}'
+    for _ in range(2):
+        pattern = f'({cjk})\s*\\n+\s*({short_content})\s*\\n+\s*({cjk}|[，。！？：,.?])'
+        text = re.sub(pattern, r'\1 \2 \3', text)
+
+    # 4. 標點黏合
+    text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
 
     return text
 
@@ -230,7 +211,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理 AI 夥伴")
-    st.caption("Jutor AI 教學系統 v6.1 (排版修復版 18:45)")
+    st.caption("Jutor AI 教學系統 v6.3 (類題優化版 19:15)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -285,13 +266,10 @@ if not st.session_state.is_solving:
 
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
                         
-                        # --- 修正重點：Prompt 明確要求行內格式 ---
                         formatting = """
                         【排版嚴格指令 - 關於數值與變數】
                         1. **絕對禁止**將純數字(如 288, -34)、變數(如 x, y)或極短的式子(如 a=1)獨立成一行。
                         2. 這些數值**必須**跟隨在前後文字之間 (Inline Mode)。
-                           - 錯誤範例：係數是 \n -34 \n 。
-                           - 正確範例：係數是 -34 。
                         3. 單純數值或變數，請直接書寫或使用 `$x$` (一個錢字號)，**嚴禁**使用 `$$x$$` (兩個錢字號)，因為那會強制換行。
                         4. 只有在「多行計算過程」時，才使用 `$$ ... $$` 或 `aligned` 環境進行換行對齊。
                         """
@@ -311,6 +289,9 @@ if not st.session_state.is_solving:
                         else:
                             style = "風格：純算式、LaTeX、極簡。"
 
+                        # --- 修正重點：類題流程控制 ---
+                        # 確保「驗收類題標題」與「題目內容」在同一個 STEP
+                        # 確保「類題答案」在下一個 STEP
                         prompt = f"""
                         {guardrail}
                         {transcription}
@@ -326,7 +307,12 @@ if not st.session_state.is_solving:
                         確認題目 ===STEP===
                         解題過程(每一步STEP分隔) ===STEP===
                         ...
-                        本題答案 ===STEP=== ### 🎯 驗收類題 ===STEP=== 🗝️ 類題答案 (僅提供最終數值/答案，不需過程)
+                        本題答案 ===STEP=== 
+                        ### 🎯 驗收類題
+                        (請在此處直接出題，讓標題與題目在同一個區塊顯示，不要用STEP分隔)
+                        ===STEP=== 
+                        🗝️ 類題答案
+                        (請在此處提供答案)
                         """
 
                         response, key_suffix = call_gemini_with_rotation(prompt, image, use_pro=use_pro)
@@ -335,7 +321,6 @@ if not st.session_state.is_solving:
                         if "REFUSE_OFF_TOPIC" in response.text:
                             st.error("🙅‍♂️ 這個學校好像不會考喔！(若為誤判，請嘗試裁切圖片)")
                         else:
-                            # 套用強力修復函式
                             full_text = clean_output_format(response.text)
                             
                             image_desc = "無描述"
@@ -422,8 +407,11 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.button("🤔 我想問...", on_click=enter_qa_mode, use_container_width=True)
 
             with col_next:
+                # --- 流程控制核心 ---
+                # 如果只剩最後一步，代表下一步是「類題答案」，所以按鈕要變成核對答案
                 btn_label = "✅ 我懂了，下一步！"
                 if st.session_state.step_index == total_steps - 2: btn_label = "👀 核對類題答案"
+                
                 def next_step():
                     st.session_state.step_index += 1
                     st.session_state.streaming_done = False
