@@ -3,5 +3,5 @@ google-generativeai>=0.8.3
 Pillow
 gspread
 google-auth
-plotly
-pandas
+matplotlib
+numpy
