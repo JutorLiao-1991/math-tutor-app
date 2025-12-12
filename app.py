@@ -31,14 +31,12 @@ def inject_custom_css():
             align-items: center;
             justify-content: center;
         }
-        /* 隱藏預設的 Hamburger Menu (選用) */
-        /* #MainMenu {visibility: hidden;} */
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-# --- 【新版】字型設定：直接讀取本地檔案 ---
+# --- 字型設定 ---
 def configure_chinese_font():
     font_file = "NotoSansTC-Regular.ttf"
     if os.path.exists(font_file):
@@ -50,12 +48,11 @@ def configure_chinese_font():
             plt.rcParams['axes.unicode_minus'] = False 
             return font_name
         except Exception as e:
-            print(f"字體載入錯誤: {e}")
             return "sans-serif"
     else:
         return "sans-serif"
 
-# --- 圖片與頭像設定 ---
+# --- 圖片與頭像 ---
 main_logo_path = "logo.jpg"
 if os.path.exists(main_logo_path):
     page_icon_set = Image.open(main_logo_path)
@@ -64,7 +61,7 @@ else:
 assistant_avatar = "🦔" 
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v5.5", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v5.7", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 CORRECT_FONT_NAME = configure_chinese_font()
 
@@ -80,6 +77,7 @@ if 'data_saved' not in st.session_state: st.session_state.data_saved = False
 if 'plot_code' not in st.session_state: st.session_state.plot_code = None
 if 'use_pro_model' not in st.session_state: st.session_state.use_pro_model = False
 if 'trigger_rescue' not in st.session_state: st.session_state.trigger_rescue = False
+if 'used_key_suffix' not in st.session_state: st.session_state.used_key_suffix = "" 
 
 # --- 函數區 ---
 def stream_text(text):
@@ -91,7 +89,7 @@ def trigger_vibration():
     vibrate_js = """<script>if(navigator.vibrate){navigator.vibrate(30);}</script>"""
     components.html(vibrate_js, height=0, width=0)
 
-def save_to_google_sheets(grade, mode, image_desc, full_response):
+def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
     try:
         if "gcp_service_account" in st.secrets:
             scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -101,7 +99,7 @@ def save_to_google_sheets(grade, mode, image_desc, full_response):
             client = gspread.authorize(creds)
             sheet = client.open("Jutor_Learning_Data").sheet1
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            sheet.append_row([timestamp, grade, mode, image_desc, full_response])
+            sheet.append_row([timestamp, grade, mode, image_desc, full_response, key_info])
             return True
     except Exception as e:
         print(f"存檔失敗: {e}")
@@ -127,6 +125,28 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
+# --- 新增：文字排版清理大師 ---
+def clean_output_format(text):
+    """
+    功能：修復 AI 生成的排版問題
+    1. 將單獨成行的標點符號 (, . ， 。 : 等) 黏回上一行
+    2. 移除多餘的連續換行
+    """
+    if not text: return text
+    
+    # Regex 邏輯：
+    # \n : 換行
+    # \s* : 可能有的空白
+    # ([...]) : 捕捉標點符號
+    # 替換為 \1 (只保留標點，去掉前面的換行)
+    
+    # 處理中文標點
+    text = re.sub(r'\n\s*([，。、！？：])', r'\1', text)
+    # 處理英文/數學標點 (逗號, 句號, 冒號)
+    text = re.sub(r'\n\s*([,.:])', r'\1', text)
+    
+    return text
+
 def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
     try:
         keys = st.secrets["API_KEYS"]
@@ -135,8 +155,7 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
         st.error("API_KEYS 設定錯誤")
         st.stop()
     
-    # 確保順序：免費優先 -> 付費在後
-    target_keys = keys.copy()
+    target_keys = keys.copy() 
     
     if use_pro:
         model_name = 'models/gemini-2.5-pro'
@@ -153,7 +172,9 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
                 response = model.generate_content([prompt_content, image_input])
             else:
                 response = model.generate_content(prompt_content)
-            return response
+            
+            return response, key[-4:] 
+            
         except Exception as e:
             if "429" in str(e) or "Quota" in str(e) or "503" in str(e):
                 last_error = e
@@ -173,7 +194,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理 AI 夥伴")
-    st.caption("Jutor AI 教學系統 v5.5 (更新時間: 2025/12/12 17:30)")
+    st.caption("Jutor AI 教學系統 v5.7 (更新時間: 2025/12/12 17:55)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -224,21 +245,24 @@ if not st.session_state.is_solving:
                 
                 with st.spinner(loading_text):
                     try:
-                        # --- 防護網回歸單純版 ---
                         guardrail = "【過濾機制】請辨識圖片內容。若明顯為「自拍照、風景照、寵物照」等與學習無關的圖片，請回傳 REFUSE_OFF_TOPIC。若是數學題目、文字截圖、圖表分析，即使模糊或非典型格式，也請回答。"
 
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
                         
-                        # --- 修正重點 1：排版指令優化 (直式計算) ---
+                        # --- 修正重點：排版 Prompt 與 LaTeX 要求 ---
                         formatting = """
                         【排版嚴格要求】
-                        1. 遇到計算過程，嚴禁將多個等號寫在同一行。
-                        2. 必須使用「直式計算」排版，每個等號前請務必換行。
-                        3. 範例：
-                           y = 2x + 1
-                           = 2(3) + 1
-                           = 7
-                        4. 若使用 LaTeX，請用 aligned 環境或 \\\\ 換行。
+                        1. 標點符號 (如 , . ， 。) 必須緊跟在文字後，嚴禁單獨換行。
+                        2. 計算過程請使用 LaTeX 的 aligned 環境，使等號對齊。
+                           範例：
+                           $$
+                           \\begin{aligned}
+                           y &= 2x + 1 \\\\
+                             &= 2(3) + 1 \\\\
+                             &= 7
+                           \\end{aligned}
+                           $$
+                        3. 不要讓等號單獨出現在一行。
                         """
                         
                         plotting = """
@@ -256,7 +280,6 @@ if not st.session_state.is_solving:
                         else:
                             style = "風格：純算式、LaTeX、極簡。"
 
-                        # --- 修正重點 2：類題部分僅要求答案 ---
                         prompt = f"""
                         {guardrail}
                         {transcription}
@@ -275,12 +298,15 @@ if not st.session_state.is_solving:
                         本題答案 ===STEP=== ### 🎯 驗收類題 ===STEP=== 🗝️ 類題答案 (僅提供最終數值/答案，不需過程)
                         """
 
-                        response = call_gemini_with_rotation(prompt, image, use_pro=use_pro)
+                        response, key_suffix = call_gemini_with_rotation(prompt, image, use_pro=use_pro)
+                        st.session_state.used_key_suffix = key_suffix
                         
                         if "REFUSE_OFF_TOPIC" in response.text:
                             st.error("🙅‍♂️ 這個學校好像不會考喔！(若為誤判，請嘗試裁切圖片)")
                         else:
-                            full_text = response.text
+                            # --- 關鍵修正：套用文字清洗函式 ---
+                            full_text = clean_output_format(response.text)
+                            
                             image_desc = "無描述"
                             desc_match = re.search(r"===DESC===(.*?)===DESC_END===", full_text, re.DOTALL)
                             if desc_match:
@@ -305,7 +331,7 @@ if not st.session_state.is_solving:
                             st.session_state.qa_history = []
                             st.session_state.data_saved = False
 
-                            save_to_google_sheets(selected_grade, mode, image_desc, full_text)
+                            save_to_google_sheets(selected_grade, mode, image_desc, full_text, key_suffix)
                             st.rerun()
 
                     except Exception as e:
@@ -393,7 +419,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                         with st.spinner("思考中..."):
                             try:
                                 full_prompt = "對話紀錄:\n" + "\n".join([f"{h['role']}:{h['parts'][0]}" for h in st.session_state.qa_history]) + f"\n新問題:{user_question}"
-                                response = call_gemini_with_rotation(full_prompt, use_pro=st.session_state.use_pro_model)
+                                response, _ = call_gemini_with_rotation(full_prompt, use_pro=st.session_state.use_pro_model)
                                 st.write_stream(stream_text(response.text))
                                 st.session_state.qa_history.append({"role": "model", "parts": [response.text]})
                             except: st.error("忙碌中")
