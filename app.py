@@ -19,14 +19,28 @@ def inject_custom_css():
         <style>
         .katex-html { overflow-x: auto; overflow-y: hidden; max-width: 100%; display: block; padding-bottom: 5px; }
         .stMarkdown { max-width: 100%; overflow-wrap: break-word; }
-        .stChatMessage .stChatMessageAvatar { background-color: #f0f2f6; color: #31333F; font-weight: bold; }
+        /* 調整頭像大小，避免 Logo 太大或太小 */
+        .stChatMessage .stChatMessageAvatar {
+            width: 2.5rem;
+            height: 2.5rem;
+        }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
+# --- 決定頭像 (Logo 優先，Emoji 後補) ---
+# 這樣寫最保險，如果哪天 logo.jpg 不小心被刪掉，程式也不會報錯
+logo_path = "logo.jpg"
+if os.path.exists(logo_path):
+    page_icon_set = Image.open(logo_path) # 瀏覽器分頁圖示
+    assistant_avatar = logo_path          # 聊天室頭像
+else:
+    page_icon_set = "🐦"
+    assistant_avatar = "🐦"
+
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v4.3", page_icon="🐦", layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v4.4", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 
 # --- 初始化 Session State ---
@@ -79,7 +93,7 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗 (代碼錯誤): {e}")
 
-# --- API 呼叫 (混合動力版：2.5-Flash vs 2.5-Pro) ---
+# --- API 呼叫 (混合動力版) ---
 def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
     try:
         keys = st.secrets["API_KEYS"]
@@ -91,9 +105,8 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
     shuffled_keys = keys.copy()
     random.shuffle(shuffled_keys)
     
-    # 【關鍵修改】根據您的清單選擇模型
-    # Flash: 2.5-flash (快速)
-    # Pro: 2.5-pro (清單中最強)
+    # Flash: 2.5-flash
+    # Pro: 2.5-pro
     model_name = 'models/gemini-2.5-pro' if use_pro else 'models/gemini-2.5-flash'
     
     last_error = None
@@ -120,11 +133,14 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
 
 col1, col2 = st.columns([1, 4]) 
 with col1:
-    if os.path.exists("logo.jpg"): st.image("logo.jpg", use_column_width=True)
-    else: st.markdown("<h1 style='text-align: center;'>鳩</h1>", unsafe_allow_html=True)
+    # 這裡顯示大張的 Logo 圖片
+    if os.path.exists("logo.jpg"): 
+        st.image("logo.jpg", use_column_width=True)
+    else: 
+        st.markdown("<h1 style='text-align: center;'>鳩</h1>", unsafe_allow_html=True)
 with col2:
     st.title("鳩特數理ＡＩ小幫手")
-    st.caption("AI 鳩特解題 v4.3 (2.5 雙引擎版)")
+    st.caption("AI 鳩特解題 v4.4 (Logo 版)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -163,7 +179,6 @@ if not st.session_state.is_solving:
                 st.session_state.solve_mode = mode
                 st.session_state.use_pro_model = use_pro
                 
-                # 提示使用者目前使用的引擎
                 engine_name = "Jutor 2.5 Pro" if use_pro else "Jutor 2.5 Flash"
                 loading_text = f"{engine_name} 正在啟動繪圖引擎與分析..."
                 
@@ -266,13 +281,13 @@ if st.session_state.is_solving and st.session_state.solution_steps:
 
     # 顯示步驟
     for i in range(st.session_state.step_index):
-        # 【修正】Avatar 改回 Emoji 🐦，避免報錯
-        with st.chat_message("assistant", avatar="🐦"):
+        # 【修改】使用 assistant_avatar 變數 (Logo 圖片)
+        with st.chat_message("assistant", avatar=assistant_avatar):
             st.markdown(st.session_state.solution_steps[i])
             
     current_step_text = st.session_state.solution_steps[st.session_state.step_index]
-    # 【修正】Avatar 改回 Emoji 🐦
-    with st.chat_message("assistant", avatar="🐦"):
+    # 【修改】使用 assistant_avatar 變數
+    with st.chat_message("assistant", avatar=assistant_avatar):
         if not st.session_state.streaming_done:
             trigger_vibration()
             st.write_stream(stream_text(current_step_text))
@@ -314,21 +329,26 @@ if st.session_state.is_solving and st.session_state.solution_steps:
             with st.container(border=True):
                 st.markdown("#### 💡 提問時間")
                 for msg in st.session_state.qa_history[2:]:
-                     # 【修正】Avatar 改回 Emoji 🐦
-                     with st.chat_message("user" if msg["role"] == "user" else "assistant", avatar="👤" if msg["role"] == "user" else "🐦"):
+                     # 判斷是使用者還是助手
+                     if msg["role"] == "user":
+                         icon = "👤"
+                     else:
+                         icon = assistant_avatar
+                     
+                     with st.chat_message(msg["role"], avatar=icon):
                          st.markdown(msg["parts"][0])
+                         
                 user_question = st.chat_input("請輸入問題...")
                 if user_question:
                     with st.chat_message("user", avatar="👤"): st.markdown(user_question)
                     st.session_state.qa_history.append({"role": "user", "parts": [user_question]})
                     
-                    # 【修正】Avatar 改回 Emoji 🐦
-                    with st.chat_message("assistant", avatar="🐦"):
+                    # 【修改】使用 assistant_avatar 變數
+                    with st.chat_message("assistant", avatar=assistant_avatar):
                         with st.spinner("思考中..."):
                             try:
                                 full_prompt = "對話紀錄:\n" + "\n".join([f"{h['role']}:{h['parts'][0]}" for h in st.session_state.qa_history]) + f"\n新問題:{user_question}"
                                 
-                                # 問答模式也沿用目前的模型選擇 (Pro or Flash)
                                 response = call_gemini_with_rotation(full_prompt, use_pro=st.session_state.use_pro_model)
                                 st.write_stream(stream_text(response.text))
                                 st.session_state.qa_history.append({"role": "model", "parts": [response.text]})
