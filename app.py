@@ -26,7 +26,7 @@ def inject_custom_css():
     )
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v3.8", page_icon="🐦", layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v4.1 Pro", page_icon="🐦", layout="centered")
 inject_custom_css()
 
 # --- 初始化 Session State ---
@@ -38,7 +38,6 @@ if 'in_qa_mode' not in st.session_state: st.session_state.in_qa_mode = False
 if 'qa_history' not in st.session_state: st.session_state.qa_history = []
 if 'solve_mode' not in st.session_state: st.session_state.solve_mode = "verbal"
 if 'data_saved' not in st.session_state: st.session_state.data_saved = False
-# 【新增】存儲繪圖代碼
 if 'plot_code' not in st.session_state: st.session_state.plot_code = None
 
 # --- 函數區 ---
@@ -67,28 +66,20 @@ def save_to_google_sheets(grade, mode, image_desc, full_response):
         print(f"存檔失敗: {e}")
         return False
 
-# --- 【核心新增】執行 AI 給的繪圖程式碼 ---
+# --- 執行 AI 給的繪圖程式碼 ---
 def execute_and_show_plot(code_snippet):
     try:
-        # 建立一個全新的圖表，避免重疊
         plt.figure(figsize=(6, 4))
-        
-        # 為了安全，我們限制 exec 能存取的環境
-        # 讓 AI 可以使用 plt (matplotlib) 和 np (numpy)
+        # 設定繪圖風格
+        plt.style.use('seaborn-v0_8-whitegrid') 
         local_scope = {'plt': plt, 'np': np}
-        
-        # 執行 AI 寫的程式碼
         exec(code_snippet, globals(), local_scope)
-        
-        # 在 Streamlit 顯示
         st.pyplot(plt)
-        
-        # 關閉圖表釋放記憶體
         plt.close()
     except Exception as e:
         st.warning(f"圖形繪製失敗 (代碼錯誤): {e}")
 
-# --- API 呼叫 ---
+# --- API 呼叫 (指定使用 2.5 Pro) ---
 def call_gemini_with_rotation(prompt_content, image_input=None):
     try:
         keys = st.secrets["API_KEYS"]
@@ -104,13 +95,17 @@ def call_gemini_with_rotation(prompt_content, image_input=None):
     for key in shuffled_keys:
         try:
             genai.configure(api_key=key)
-            model = genai.GenerativeModel('gemini-1.5-flash') # 使用 1.5 Flash 穩定版
+            
+            # 【核心修改】使用您清單中最強的 2.5 Pro
+            model = genai.GenerativeModel('models/gemini-2.5-pro')
+            
             if image_input:
                 response = model.generate_content([prompt_content, image_input])
             else:
                 response = model.generate_content(prompt_content)
             return response
         except Exception as e:
+            # 即使付費，如果是瞬時流量過大 (RPM)，輪替機制還是很有用的
             if "429" in str(e) or "Quota" in str(e) or "503" in str(e):
                 last_error = e
                 continue
@@ -126,7 +121,7 @@ with col1:
     else: st.markdown("<h1 style='text-align: center;'>鳩</h1>", unsafe_allow_html=True)
 with col2:
     st.title("鳩特數理ＡＩ小幫手")
-    st.caption("AI 鳩特解題 v3.8 (繪圖升級版)")
+    st.caption("AI 鳩特解題 v4.1 (2.5 Pro 旗艦版)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -160,23 +155,21 @@ if not st.session_state.is_solving:
             else:
                 mode = "verbal" if start_verbal else "math"
                 st.session_state.solve_mode = mode
-                loading_text = "Jutor 正在思考..."
+                loading_text = "Jutor Pro (2.5) 正在深度思考 (啟動繪圖引擎)..."
                 
                 with st.spinner(loading_text):
                     try:
-                        # 防護網
-                        guardrail_instruction = "【最高防護指令】非課業相關(自拍/風景)請回傳: REFUSE_OFF_TOPIC"
-                        transcription_instruction = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
-                        formatting_instruction = "【排版】文字算式分行。長算式用 `\\\\` 換行。"
-
-                        # --- 【新增】繪圖指令 ---
-                        plotting_instruction = """
+                        # Prompt 指令集
+                        guardrail = "【最高防護】非課業相關(自拍/風景)請回傳: REFUSE_OFF_TOPIC"
+                        transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
+                        formatting = "【排版】文字算式分行。長算式用 `\\\\` 換行。"
+                        
+                        plotting = """
                         【繪圖能力啟動】
-                        如果題目涉及「函數圖形」或「幾何座標」，請**務必**產生一段 Python 程式碼來繪製該圖形。
-                        1. 程式碼必須使用 `import matplotlib.pyplot as plt` 和 `import numpy as np`。
-                        2. 圖形必須有清楚的標示 (Title, Labels, Grid)。
-                        3. 請將這段程式碼包在 `===PLOT===` 與 `===PLOT_END===` 之間。
-                        4. 若不需要繪圖，則不需要回傳此區塊。
+                        如果題目涉及「函數圖形」或「幾何座標」，請產生 Python 程式碼 (matplotlib + numpy)。
+                        1. 程式碼必須能直接執行。
+                        2. 必須包在 `===PLOT===` 與 `===PLOT_END===` 之間。
+                        3. 圖表請盡量美觀，標註座標軸。
                         """
 
                         common_role = f"角色：你是 Jutor。年級：{selected_grade}。題目：{question_target}。"
@@ -186,20 +179,20 @@ if not st.session_state.is_solving:
                             style = "風格：純算式、LaTeX、極簡。"
 
                         prompt = f"""
-                        {guardrail_instruction}
-                        {transcription_instruction}
-                        {formatting_instruction}
-                        {plotting_instruction}
+                        {guardrail}
+                        {transcription}
+                        {formatting}
+                        {plotting}
                         
                         {common_role}
                         {style}
 
-                        最後結構：
-                        (描述區塊) ===DESC=== ... ===DESC_END===
-                        (繪圖區塊-選用) ===PLOT=== python程式碼 ===PLOT_END===
-                        (解題區塊)
+                        結構要求：
+                        (描述) ===DESC=== ... ===DESC_END===
+                        (繪圖-選用) ===PLOT=== python code ===PLOT_END===
+                        (解題)
                         確認題目 ===STEP===
-                        解題過程(每一步用STEP分隔) ===STEP===
+                        解題過程(每一步STEP分隔) ===STEP===
                         ...
                         本題答案 ===STEP=== 【驗收類題】 ===STEP=== 【類題詳解】
                         """
@@ -218,16 +211,14 @@ if not st.session_state.is_solving:
                                 image_desc = desc_match.group(1).strip()
                                 full_text = full_text.replace(desc_match.group(0), "")
 
-                            # 2. 【新增】提取繪圖代碼
+                            # 2. 提取繪圖代碼
                             plot_code = None
                             plot_match = re.search(r"===PLOT===(.*?)===PLOT_END===", full_text, re.DOTALL)
                             if plot_match:
                                 plot_code = plot_match.group(1).strip()
-                                # 移除 markdown 的 ```python 標記 (如果 AI 雞婆加上的話)
                                 plot_code = plot_code.replace("```python", "").replace("```", "")
                                 full_text = full_text.replace(plot_match.group(0), "")
                             
-                            # 存入 Session
                             st.session_state.plot_code = plot_code
                             
                             # 3. 處理步驟
@@ -244,7 +235,9 @@ if not st.session_state.is_solving:
                             st.rerun()
 
                     except Exception as e:
-                        if "429" in str(e) or "Quota" in str(e): st.warning("🥵 鳩特老師喝口水休息中... (請稍候重試)")
+                        if "429" in str(e) or "Quota" in str(e): 
+                            st.warning("🥵 系統忙碌中 (High Traffic)...")
+                            st.error("請稍候重試！")
                         else: st.error(f"錯誤：{e}")
 
 # ================= 解題互動 =================
@@ -254,7 +247,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
     header_text = "🗣️ Jutor 口語教學中" if st.session_state.solve_mode == "verbal" else "🔢 純算式推導中"
     st.subheader(header_text)
     
-    # --- 【新增】 如果有圖，先畫出來 ---
+    # 顯示繪圖
     if st.session_state.plot_code:
         with st.expander("📊 查看幾何/函數圖形 (AI 繪製)", expanded=True):
             execute_and_show_plot(st.session_state.plot_code)
@@ -273,7 +266,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
         else:
             st.markdown(current_step_text)
 
-    # 按鈕控制區
+    # 按鈕控制
     total_steps = len(st.session_state.solution_steps)
     if st.session_state.step_index < total_steps - 1:
         if not st.session_state.in_qa_mode:
@@ -344,5 +337,5 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.session_state.streaming_done = False
                 st.session_state.in_qa_mode = False
                 st.session_state.data_saved = False
-                st.session_state.plot_code = None # 清除繪圖
+                st.session_state.plot_code = None
                 st.rerun()
