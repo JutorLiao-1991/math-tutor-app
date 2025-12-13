@@ -35,7 +35,7 @@ def inject_custom_css():
             justify-content: center;
         }
 
-        /* --- 手機版 RWD 優化 (針對寬度小於 600px 的裝置) --- */
+        /* --- 手機版 RWD 優化 --- */
         @media only screen and (max-width: 600px) {
             .stMarkdown p, .stMarkdown li, .stMarkdown div, .stChatMessage p {
                 font-size: 15px !important;
@@ -104,7 +104,7 @@ else:
 assistant_avatar = "🦔" 
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v6.9", page_icon=page_icon_set, layout="centered")
+st.set_page_config(page_title="AI 鳩特解題 v6.8", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 CORRECT_FONT_NAME = configure_chinese_font()
 
@@ -147,23 +147,11 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 【智能排版修復 v4】混合模式 ---
+# --- 【強力排版修復 v3】 ---
 def clean_output_format(text):
     if not text: return text
     
-    # 1. 【程式碼誤用修復】
-    # 如果 AI 笨笨地把 LaTeX 寫在 code block 裡 (例如 `\frac{...}`)
-    # 我們把它拆出來，強制轉回 LaTeX 格式 ($...$)
-    # 邏輯：Code block 內如果有反斜線或大括號，通常是誤判的 LaTeX
-    def fix_latex_in_code(match):
-        content = match.group(1)
-        if '\\' in content or '{' in content or '^' in content:
-            return f"${content}$"
-        return match.group(0) # 否則保持原樣 (真的是程式碼或變數)
-    
-    text = re.sub(r'`([^`\n]+?)`', fix_latex_in_code, text)
-
-    # 2. Block Math 暴力降維 ($$ -> $)
+    # 1. 暴力降維: $$...$$ -> $...$
     def block_to_inline(match):
         content = match.group(1)
         if len(content) < 50 and '\\\\' not in content and 'align' not in content:
@@ -171,11 +159,11 @@ def clean_output_format(text):
         return match.group(0)
     text = re.sub(r'\$\$([\s\S]*?)\$\$', block_to_inline, text)
 
-    # 3. 括號與標點修復
+    # 2. 括號與標點修復
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
 
-    # 4. 中文黏合劑
+    # 3. 中文黏合劑
     cjk = r'[\u4e00-\u9fa5]'
     short_content = r'(?:(?!\n|•|- |\* ).){1,30}' 
     for _ in range(2):
@@ -231,8 +219,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理 AI 夥伴")
-    # 更新時間戳記
-    st.caption("Jutor AI 教學系統 v6.9 (混合排版修復版 12/12 20:40)")
+    st.caption("Jutor AI 教學系統 v6.8 (流程修正版 12/12 20:30)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -287,14 +274,11 @@ if not st.session_state.is_solving:
 
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
                         
-                        # --- 修正重點 1：混合排版策略 (Hybrid Strategy) ---
                         formatting = """
-                        【排版嚴格指令 (Hybrid Mode)】
-                        1. **簡單數值 (Green Mode)**：單獨的變數 (如 x, y, a)、純數字 (如 288, -34)、極短式子 (如 a=1)，請務必使用「反引號 (Backticks)」包裹。
-                           - 範例：係數是 `-34`，變數是 `x`。 (這樣會顯示綠色高亮且不換行)
-                        2. **複雜算式 (LaTeX Mode)**：分數、根號、次方、積分等，請務必使用 LaTeX 語法 `$ ... $`。
-                           - 範例：答案是 $\\frac{1}{2}$ 或 $x^2$。
-                        3. **禁止程式碼運算符**：在 LaTeX 中，乘法請用 `\\times`，禁止用 `*`。除法請用 `\\div` 或分數，禁止用程式碼的 `/`。
+                        【排版嚴格指令】
+                        1. **數值與變數不換行**：純數字(如 288, -34)、變數(如 x, y)、短式子(如 a=1)必須使用行內格式(Inline)，**嚴禁換行**，必須與前後中文緊密相連。
+                        2. **列表控制**：除非是列舉不同選項，否則不要使用 Bullet Points 來顯示單一數值。
+                        3. **直式計算**：只有在長算式推導時，才使用換行對齊。
                         """
                         
                         plotting = """
@@ -312,7 +296,7 @@ if not st.session_state.is_solving:
                         else:
                             style = "風格：純算式、LaTeX、極簡。"
 
-                        # --- 修正重點 2：多選題判斷 ---
+                        # --- 修正重點：流程結構控制 ---
                         prompt = f"""
                         {guardrail}
                         {transcription}
@@ -321,21 +305,26 @@ if not st.session_state.is_solving:
                         {common_role}
                         {style}
                         
-                        【題型辨識重要指令】
-                        1. 請先判斷題目是否為 **「多選題」** (Multiple Choice)。
-                        2. 若有 (1)(2)(3)(4)(5) 等選項，**請務必假設可能有多個正確答案**，並逐一檢查。
+                        【題型辨識】請判斷是否為多選題，若有選出所有正確選項的指令，請逐一檢查。
 
-                        結構要求：
-                        (描述) ===DESC=== ... ===DESC_END===
-                        (繪圖-選用) ===PLOT=== python code ===PLOT_END===
-                        (解題)
-                        確認題目 ===STEP===
-                        解題過程(每一步STEP分隔) ===STEP===
+                        【輸出結構嚴格要求 - 請用 `===STEP===` 分隔】
+                        1. **解題過程** (可分為多個STEP，解釋思路與計算)
                         ...
-                        本題答案 ===STEP=== 
+                        ===STEP===
+                        
+                        2. **本題答案** (標題與答案必須在同一個STEP)
+                        ### 💡 本題答案
+                        (請在此列出最終答案，如 x=16 或 x=18)
+                        
+                        ===STEP===
+                        
+                        3. **驗收類題** (標題與題目必須在同一個STEP)
                         ### 🎯 驗收類題
-                        (請在此處直接出題，標題與題目在同一個區塊)
-                        ===STEP=== 
+                        (請在此處直接出題，包含所有題目資訊)
+                        
+                        ===STEP===
+                        
+                        4. **類題答案** (最後一個STEP)
                         🗝️ 類題答案
                         (僅提供最終答案，不需詳解)
                         """
@@ -364,6 +353,7 @@ if not st.session_state.is_solving:
                             st.session_state.plot_code = plot_code
                             
                             raw_steps = full_text.split("===STEP===")
+                            # 過濾掉可能的空字串步驟
                             st.session_state.solution_steps = [step.strip() for step in raw_steps if step.strip()]
                             st.session_state.step_index = 0
                             st.session_state.is_solving = True
@@ -427,8 +417,13 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.button("🤔 我想問...", on_click=enter_qa_mode, use_container_width=True)
 
             with col_next:
+                # --- 流程控制核心 (修正版) ---
+                # 最後一步是「類題答案」，倒數第二步是「驗收類題(題目)」
+                # 所以當 step_index == total_steps - 2 時，顯示「核對答案」
+                
                 btn_label = "✅ 我懂了，下一步！"
-                if st.session_state.step_index == total_steps - 2: btn_label = "👀 核對類題答案"
+                if st.session_state.step_index == total_steps - 2: 
+                    btn_label = "👀 核對類題答案"
                 
                 def next_step():
                     st.session_state.step_index += 1
