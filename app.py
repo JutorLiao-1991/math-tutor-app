@@ -103,8 +103,8 @@ else:
     page_icon_set = "🦔"
 assistant_avatar = "🦔" 
 
-# --- 頁面設定 ---
-st.set_page_config(page_title="AI 鳩特解題 v6.8", page_icon=page_icon_set, layout="centered")
+# --- 頁面設定 (修正標題) ---
+st.set_page_config(page_title="鳩特數理-AI Jutor", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 CORRECT_FONT_NAME = configure_chinese_font()
 
@@ -145,12 +145,16 @@ def execute_and_show_plot(code_snippet):
         st.pyplot(plt)
         plt.close()
     except Exception as e:
+        # 繪圖失敗時的錯誤捕捉
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 【強力排版修復 v3】 ---
+# --- 【強力排版修復 v4】 ---
 def clean_output_format(text):
     if not text: return text
     
+    # 0. 清除開頭結尾的怪異引號 (修復 Bug 3)
+    text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
+
     # 1. 暴力降維: $$...$$ -> $...$
     def block_to_inline(match):
         content = match.group(1)
@@ -218,8 +222,8 @@ with col1:
         st.markdown("<div style='font-size: 3rem; text-align: center;'>🦔</div>", unsafe_allow_html=True)
 
 with col2:
-    st.title("鳩特數理 AI 夥伴")
-    st.caption("Jutor AI 教學系統 v6.8 (流程修正版 12/12 20:30)")
+    st.title("鳩特數理-AI Jutor")
+    st.caption("Jutor AI 教學系統 v6.9 (繪圖修復+步驟細化 12/12 21:30)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -266,7 +270,8 @@ if not st.session_state.is_solving:
                 if use_pro:
                     loading_text = "Jutor Pro (2.5) 正在深度分析並修復錯誤..."
                 else:
-                    loading_text = "Jutor AI (2.5) 正在思考怎麼教會你這題，並試著畫圖..."
+                    # 修正 Spinner 文字 (Bug 4)
+                    loading_text = "Jutor AI (2.5) 正在思考怎麼教會你這題..."
                 
                 with st.spinner(loading_text):
                     try:
@@ -281,13 +286,15 @@ if not st.session_state.is_solving:
                         3. **直式計算**：只有在長算式推導時，才使用換行對齊。
                         """
                         
+                        # --- 修正重點：繪圖 Raw String 強制令 (Bug 1) ---
                         plotting = """
                         【繪圖能力啟動】
                         1. 只有當題目明確涉及「函數圖形」、「幾何座標」、「統計圖表」時，才生成 Python 程式碼。
                         2. 程式碼必須能直接執行，並包在 `===PLOT===` 與 `===PLOT_END===` 之間。
                         3. 圖表標題、座標軸請使用中文。
-                        4. ⚠️ 嚴格 LaTeX 規範：Python 字串請用 raw string (r'...')。分數務必寫成 r'$\frac{a}{b}$' (必加括號)。
-                        5. ⚠️ 3D繪圖：若是空間坐標題，請務必使用 `ax = fig.add_subplot(111, projection='3d')`。
+                        4. ⚠️ 嚴格 LaTeX 規範：所有包含 LaTeX 語法的字串（如標題、標籤），**必須** 使用 Python raw string (例如 r'$y=x^2$')。
+                        5. ⚠️ 避免在 title 使用過於複雜的 LaTeX (如 \left, \right)，若必須使用，請確保語法完美閉合。
+                        6. ⚠️ 3D繪圖：若是空間坐標題，請務必使用 `ax = fig.add_subplot(111, projection='3d')`。
                         """
 
                         common_role = f"角色：你是 Jutor。年級：{selected_grade}。題目：{question_target}。"
@@ -296,7 +303,7 @@ if not st.session_state.is_solving:
                         else:
                             style = "風格：純算式、LaTeX、極簡。"
 
-                        # --- 修正重點：流程結構控制 ---
+                        # --- 修正重點：步驟顆粒度與多選題邏輯 (Bug 2) ---
                         prompt = f"""
                         {guardrail}
                         {transcription}
@@ -308,9 +315,13 @@ if not st.session_state.is_solving:
                         【題型辨識】請判斷是否為多選題，若有選出所有正確選項的指令，請逐一檢查。
 
                         【輸出結構嚴格要求 - 請用 `===STEP===` 分隔】
-                        1. **解題過程** (可分為多個STEP，解釋思路與計算)
-                        ...
+                        1. **解題過程** (為了避免資訊過載，請將過程拆解為 **4~6 個** 短步驟，每一步只講一個核心觀念)
                         ===STEP===
+                        (步驟1...)
+                        ===STEP===
+                        (步驟2...)
+                        ===STEP===
+                        ...
                         
                         2. **本題答案** (標題與答案必須在同一個STEP)
                         ### 💡 本題答案
@@ -417,10 +428,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.button("🤔 我想問...", on_click=enter_qa_mode, use_container_width=True)
 
             with col_next:
-                # --- 流程控制核心 (修正版) ---
-                # 最後一步是「類題答案」，倒數第二步是「驗收類題(題目)」
-                # 所以當 step_index == total_steps - 2 時，顯示「核對答案」
-                
+                # 流程控制
                 btn_label = "✅ 我懂了，下一步！"
                 if st.session_state.step_index == total_steps - 2: 
                     btn_label = "👀 核對類題答案"
