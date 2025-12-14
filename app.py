@@ -14,7 +14,21 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import numpy as np
 
-# --- 注入自定義 CSS (含手機版字體優化) ---
+# --- 頁面設定 (必須放第一行) ---
+main_logo_path = "logo.jpg"
+if os.path.exists(main_logo_path):
+    page_icon_set = Image.open(main_logo_path)
+else:
+    page_icon_set = "🦔"
+assistant_avatar = "🦔" 
+
+st.set_page_config(page_title="鳩特數理-AI Jutor", page_icon=page_icon_set, layout="centered")
+
+# ==========================================
+# 🔓 登入機制已移除 (v7.4)
+# ==========================================
+
+# --- 注入自定義 CSS ---
 def inject_custom_css():
     st.markdown(
         """
@@ -85,13 +99,14 @@ def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
         if client:
             sheet = client.open("Jutor_Learning_Data").sheet1
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            sheet.append_row([timestamp, grade, mode, image_desc, full_response, key_info])
+            # 維持倒敘排列 (最新在最上)
+            sheet.insert_row([timestamp, grade, mode, image_desc, full_response, key_info], index=2)
             return True
     except Exception as e:
         st.cache_resource.clear()
         return False
 
-# --- Telegram 回報函式 (新增 student_comment) ---
+# --- Telegram 回報函式 ---
 def send_telegram_alert(grade, question_desc, ai_response, student_comment):
     try:
         if "telegram" in st.secrets:
@@ -123,20 +138,10 @@ def send_telegram_alert(grade, question_desc, ai_response, student_comment):
         print(f"Telegram 發送失敗: {e}")
         return False
 
-# --- 圖片與頭像 ---
-main_logo_path = "logo.jpg"
-if os.path.exists(main_logo_path):
-    page_icon_set = Image.open(main_logo_path)
-else:
-    page_icon_set = "🦔"
-assistant_avatar = "🦔" 
-
-# --- 頁面設定 ---
-st.set_page_config(page_title="鳩特數理-AI Jutor", page_icon=page_icon_set, layout="centered")
+# --- 初始化 ---
 inject_custom_css()
 CORRECT_FONT_NAME = configure_chinese_font()
 
-# --- 初始化 Session State ---
 if 'step_index' not in st.session_state: st.session_state.step_index = 0
 if 'solution_steps' not in st.session_state: st.session_state.solution_steps = []
 if 'is_solving' not in st.session_state: st.session_state.is_solving = False
@@ -151,7 +156,7 @@ if 'trigger_rescue' not in st.session_state: st.session_state.trigger_rescue = F
 if 'used_key_suffix' not in st.session_state: st.session_state.used_key_suffix = "" 
 if 'image_desc_cache' not in st.session_state: st.session_state.image_desc_cache = "" 
 if 'full_text_cache' not in st.session_state: st.session_state.full_text_cache = ""   
-if 'is_reporting' not in st.session_state: st.session_state.is_reporting = False # 新增：控制回報區塊顯示
+if 'is_reporting' not in st.session_state: st.session_state.is_reporting = False
 
 # --- 函數區 ---
 def trigger_vibration():
@@ -178,7 +183,7 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 【強力排版修復 v4】 ---
+# --- 排版修復 v4 ---
 def clean_output_format(text):
     if not text: return text
     text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
@@ -228,8 +233,6 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
                 raise e
     raise last_error
 
-# ================= 介面設計 =================
-
 col1, col2 = st.columns([1, 4]) 
 with col1:
     if os.path.exists(main_logo_path):
@@ -239,7 +242,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v7.1 (回報意見填寫版 12/12 21:50)")
+    st.caption("Jutor AI 教學系統 v7.4 (開放存取版)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -247,10 +250,9 @@ with col_grade_label:
     st.markdown("### 📋 請先選擇年級：")
     st.caption("Jutor 會依此調整講解口吻。")
 with col_grade_select:
-    selected_grade = st.selectbox("年級", ("國一", "國二", "國三", "高一", "高二", "高三"), label_visibility="collapsed")
+    selected_grade = st.selectbox("年級", ("小五", "小六", "國一", "國二", "國三", "高一", "高二", "高三"), label_visibility="collapsed")
 st.markdown("---")
 
-# --- 上傳區 ---
 if not st.session_state.is_solving:
     st.subheader("📸 1️⃣ 上傳題目 & 指定")
     uploaded_file = st.file_uploader("選擇圖片 (JPG, PNG)", type=["jpg", "png", "jpeg"], label_visibility="collapsed")
@@ -268,7 +270,6 @@ if not st.session_state.is_solving:
             start_math = st.button("🔢 純算式解法", use_container_width=True)
 
         if start_verbal or start_math or st.session_state.trigger_rescue:
-            
             if not question_target:
                 st.warning("⚠️ 請先輸入你想問哪一題！")
             else:
@@ -308,6 +309,11 @@ if not st.session_state.is_solving:
                         6. ⚠️ 3D繪圖：若是空間坐標題，請務必使用 `ax = fig.add_subplot(111, projection='3d')`。
                         """
                         common_role = f"角色：你是 Jutor。年級：{selected_grade}。題目：{question_target}。"
+                        
+                        # --- 國小課綱邏輯 (維持) ---
+                        if selected_grade in ["小五", "小六"]:
+                            common_role += "【重要】學生為台灣國小生，請嚴格遵守台灣國小數學課綱：1. 避免使用二元一次聯立方程式或過於抽象的代數符號(x,y)。2. 多使用「線段圖」、「基準量比較量」或具體數字推演來解釋。3. 語言要更白話、具體。"
+
                         if mode == "verbal":
                             style = "風格：幽默口語、譬喻教學、步驟化。"
                         else:
@@ -341,6 +347,7 @@ if not st.session_state.is_solving:
                         3. **驗收類題** (標題與題目必須在同一個STEP)
                         ### 🎯 驗收類題
                         (請在此處直接出題，包含所有題目資訊)
+                        (若為國小生，請出數字較簡單、觀念類似的應用題)
                         
                         ===STEP===
                         
@@ -382,7 +389,7 @@ if not st.session_state.is_solving:
                             st.session_state.in_qa_mode = False
                             st.session_state.qa_history = []
                             st.session_state.data_saved = False
-                            st.session_state.is_reporting = False # 重置回報狀態
+                            st.session_state.is_reporting = False
 
                             save_to_google_sheets(selected_grade, mode, image_desc, full_text, key_suffix)
                             st.rerun()
@@ -419,7 +426,6 @@ if st.session_state.is_solving and st.session_state.solution_steps:
 
     total_steps = len(st.session_state.solution_steps)
     
-    # 若回報模式開啟，隱藏原本的導航按鈕，只顯示回報表單
     if st.session_state.is_reporting:
         st.markdown("---")
         with st.container(border=True):
@@ -534,7 +540,6 @@ if st.session_state.is_solving and st.session_state.solution_steps:
         st.markdown("")
         st.markdown("---")
         
-        # --- 回報按鈕邏輯 ---
         if not st.session_state.is_reporting:
             report_col1, report_col2 = st.columns([1, 4])
             with report_col2:
