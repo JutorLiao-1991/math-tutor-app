@@ -7,22 +7,20 @@ import streamlit.components.v1 as components
 import random
 import re
 import gspread
+import requests  # 新增 requests 用於發送 Telegram
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import numpy as np
 
-# --- 注入自定義 CSS (含手機版字體優化) ---
+# --- 注入自定義 CSS ---
 def inject_custom_css():
     st.markdown(
         """
         <style>
-        /* 全域字體設定 */
         .katex-html { overflow-x: auto; overflow-y: hidden; max-width: 100%; display: block; padding-bottom: 5px; }
         .stMarkdown { max-width: 100%; overflow-wrap: break-word; }
-        
-        /* 頭像樣式 */
         .stChatMessage .stChatMessageAvatar {
             width: 2.8rem;
             height: 2.8rem;
@@ -34,8 +32,6 @@ def inject_custom_css():
             align-items: center;
             justify-content: center;
         }
-
-        /* --- 手機版 RWD 優化 --- */
         @media only screen and (max-width: 600px) {
             .stMarkdown p, .stMarkdown li, .stMarkdown div, .stChatMessage p {
                 font-size: 15px !important;
@@ -51,7 +47,6 @@ def inject_custom_css():
         unsafe_allow_html=True,
     )
 
-# --- 快取字體設定 ---
 @st.cache_resource
 def configure_chinese_font():
     font_file = "NotoSansTC-Regular.ttf"
@@ -68,7 +63,6 @@ def configure_chinese_font():
     else:
         return "sans-serif"
 
-# --- 快取 Google Sheets 連線 ---
 @st.cache_resource
 def get_google_sheet_client():
     try:
@@ -95,7 +89,40 @@ def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
         st.cache_resource.clear()
         return False
 
-# --- 圖片與頭像 ---
+# --- 新增：Telegram 回報函式 ---
+def send_telegram_alert(grade, question_desc, ai_response):
+    try:
+        if "telegram" in st.secrets:
+            token = st.secrets["telegram"]["bot_token"]
+            chat_id = st.secrets["telegram"]["chat_id"]
+            
+            # 整理訊息內容
+            message = f"""
+🚨 **Jutor 錯誤回報** 🚨
+-----------------------
+📅 時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+🎓 年級: {grade}
+📝 題目描述: {question_desc[:100]}... (略)
+
+🤖 **AI 的回答:**
+{ai_response[:500]}... (內容過長截斷)
+
+-----------------------
+👨‍🏫 請老師查閱 Google Sheets 完整紀錄。
+            """
+            
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            payload = {
+                "chat_id": chat_id,
+                "text": message,
+                "parse_mode": "Markdown"
+            }
+            requests.post(url, json=payload)
+            return True
+    except Exception as e:
+        print(f"Telegram 發送失敗: {e}")
+        return False
+
 main_logo_path = "logo.jpg"
 if os.path.exists(main_logo_path):
     page_icon_set = Image.open(main_logo_path)
@@ -103,12 +130,10 @@ else:
     page_icon_set = "🦔"
 assistant_avatar = "🦔" 
 
-# --- 頁面設定 (修正標題) ---
 st.set_page_config(page_title="鳩特數理-AI Jutor", page_icon=page_icon_set, layout="centered")
 inject_custom_css()
 CORRECT_FONT_NAME = configure_chinese_font()
 
-# --- 初始化 Session State ---
 if 'step_index' not in st.session_state: st.session_state.step_index = 0
 if 'solution_steps' not in st.session_state: st.session_state.solution_steps = []
 if 'is_solving' not in st.session_state: st.session_state.is_solving = False
@@ -121,8 +146,9 @@ if 'plot_code' not in st.session_state: st.session_state.plot_code = None
 if 'use_pro_model' not in st.session_state: st.session_state.use_pro_model = False
 if 'trigger_rescue' not in st.session_state: st.session_state.trigger_rescue = False
 if 'used_key_suffix' not in st.session_state: st.session_state.used_key_suffix = "" 
+if 'image_desc_cache' not in st.session_state: st.session_state.image_desc_cache = "" # 新增：快取題目描述供回報用
+if 'full_text_cache' not in st.session_state: st.session_state.full_text_cache = ""   # 新增：快取全文供回報用
 
-# --- 函數區 ---
 def trigger_vibration():
     vibrate_js = """<script>if(navigator.vibrate){navigator.vibrate(30);}</script>"""
     components.html(vibrate_js, height=0, width=0)
@@ -145,35 +171,24 @@ def execute_and_show_plot(code_snippet):
         st.pyplot(plt)
         plt.close()
     except Exception as e:
-        # 繪圖失敗時的錯誤捕捉
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 【強力排版修復 v4】 ---
 def clean_output_format(text):
     if not text: return text
-    
-    # 0. 清除開頭結尾的怪異引號 (修復 Bug 3)
     text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
-
-    # 1. 暴力降維: $$...$$ -> $...$
     def block_to_inline(match):
         content = match.group(1)
         if len(content) < 50 and '\\\\' not in content and 'align' not in content:
             return f"${content.strip()}$"
         return match.group(0)
     text = re.sub(r'\$\$([\s\S]*?)\$\$', block_to_inline, text)
-
-    # 2. 括號與標點修復
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
-
-    # 3. 中文黏合劑
     cjk = r'[\u4e00-\u9fa5]'
     short_content = r'(?:(?!\n|•|- |\* ).){1,30}' 
     for _ in range(2):
         pattern = f'(?<={cjk})\s*\\n+\s*({short_content})\s*\\n+\s*(?={cjk}|[，。！？：,.?])'
         text = re.sub(pattern, r' \1 ', text)
-
     return text
 
 def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
@@ -185,14 +200,11 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
         st.stop()
     
     target_keys = keys.copy() 
-    
     if use_pro:
         model_name = 'models/gemini-2.5-pro'
     else:
         model_name = 'models/gemini-2.5-flash'
-    
     last_error = None
-    
     for key in target_keys:
         try:
             genai.configure(api_key=key)
@@ -201,9 +213,7 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
                 response = model.generate_content([prompt_content, image_input])
             else:
                 response = model.generate_content(prompt_content)
-            
             return response, key[-4:] 
-            
         except Exception as e:
             if "429" in str(e) or "Quota" in str(e) or "503" in str(e):
                 last_error = e
@@ -211,8 +221,6 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
             else:
                 raise e
     raise last_error
-
-# ================= 介面設計 =================
 
 col1, col2 = st.columns([1, 4]) 
 with col1:
@@ -223,7 +231,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v6.9 (繪圖修復+步驟細化 12/12 21:30)")
+    st.caption("Jutor AI 教學系統 v7.0 (錯誤回報機制版)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -234,7 +242,6 @@ with col_grade_select:
     selected_grade = st.selectbox("年級", ("國一", "國二", "國三", "高一", "高二", "高三"), label_visibility="collapsed")
 st.markdown("---")
 
-# --- 上傳區 ---
 if not st.session_state.is_solving:
     st.subheader("📸 1️⃣ 上傳題目 & 指定")
     uploaded_file = st.file_uploader("選擇圖片 (JPG, PNG)", type=["jpg", "png", "jpeg"], label_visibility="collapsed")
@@ -270,23 +277,18 @@ if not st.session_state.is_solving:
                 if use_pro:
                     loading_text = "Jutor Pro (2.5) 正在深度分析並修復錯誤..."
                 else:
-                    # 修正 Spinner 文字 (Bug 4)
                     loading_text = "Jutor AI (2.5) 正在思考怎麼教會你這題..."
                 
                 with st.spinner(loading_text):
                     try:
                         guardrail = "【過濾機制】請辨識圖片內容。若明顯為「自拍照、風景照、寵物照」等與學習無關的圖片，請回傳 REFUSE_OFF_TOPIC。若是數學題目、文字截圖、圖表分析，即使模糊或非典型格式，也請回答。"
-
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
-                        
                         formatting = """
                         【排版嚴格指令】
                         1. **數值與變數不換行**：純數字(如 288, -34)、變數(如 x, y)、短式子(如 a=1)必須使用行內格式(Inline)，**嚴禁換行**，必須與前後中文緊密相連。
                         2. **列表控制**：除非是列舉不同選項，否則不要使用 Bullet Points 來顯示單一數值。
                         3. **直式計算**：只有在長算式推導時，才使用換行對齊。
                         """
-                        
-                        # --- 修正重點：繪圖 Raw String 強制令 (Bug 1) ---
                         plotting = """
                         【繪圖能力啟動】
                         1. 只有當題目明確涉及「函數圖形」、「幾何座標」、「統計圖表」時，才生成 Python 程式碼。
@@ -296,14 +298,12 @@ if not st.session_state.is_solving:
                         5. ⚠️ 避免在 title 使用過於複雜的 LaTeX (如 \left, \right)，若必須使用，請確保語法完美閉合。
                         6. ⚠️ 3D繪圖：若是空間坐標題，請務必使用 `ax = fig.add_subplot(111, projection='3d')`。
                         """
-
                         common_role = f"角色：你是 Jutor。年級：{selected_grade}。題目：{question_target}。"
                         if mode == "verbal":
                             style = "風格：幽默口語、譬喻教學、步驟化。"
                         else:
                             style = "風格：純算式、LaTeX、極簡。"
 
-                        # --- 修正重點：步驟顆粒度與多選題邏輯 (Bug 2) ---
                         prompt = f"""
                         {guardrail}
                         {transcription}
@@ -353,6 +353,10 @@ if not st.session_state.is_solving:
                             if desc_match:
                                 image_desc = desc_match.group(1).strip()
                                 full_text = full_text.replace(desc_match.group(0), "")
+                            
+                            # 儲存到 Session State 供回報使用
+                            st.session_state.image_desc_cache = image_desc
+                            st.session_state.full_text_cache = full_text
 
                             plot_code = None
                             plot_match = re.search(r"===PLOT===(.*?)===PLOT_END===", full_text, re.DOTALL)
@@ -364,7 +368,6 @@ if not st.session_state.is_solving:
                             st.session_state.plot_code = plot_code
                             
                             raw_steps = full_text.split("===STEP===")
-                            # 過濾掉可能的空字串步驟
                             st.session_state.solution_steps = [step.strip() for step in raw_steps if step.strip()]
                             st.session_state.step_index = 0
                             st.session_state.is_solving = True
@@ -381,8 +384,6 @@ if not st.session_state.is_solving:
                             st.warning("🥵 系統忙碌中...")
                             st.error("請稍候重試！")
                         else: st.error(f"錯誤：{e}")
-
-# ================= 解題互動 =================
 
 if st.session_state.is_solving and st.session_state.solution_steps:
     
@@ -428,7 +429,6 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.button("🤔 我想問...", on_click=enter_qa_mode, use_container_width=True)
 
             with col_next:
-                # 流程控制
                 btn_label = "✅ 我懂了，下一步！"
                 if st.session_state.step_index == total_steps - 2: 
                     btn_label = "👀 核對類題答案"
@@ -471,6 +471,8 @@ if st.session_state.is_solving and st.session_state.solution_steps:
     else:
         st.markdown("---")
         st.success("🎉 恭喜完成！")
+        
+        # --- 最終頁面的按鈕佈局 ---
         col_end_back, col_end_reset = st.columns([1, 2])
         with col_end_back:
             def prev_step_end():
@@ -487,14 +489,24 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.session_state.use_pro_model = False
                 st.rerun()
 
-        if not st.session_state.use_pro_model:
-            st.markdown("")
-            st.markdown("")
-            st.markdown("---")
-            warn_col1, warn_col2 = st.columns([2, 1])
-            with warn_col2:
-                 if st.button("🚨 答案有錯！請 Jutor Pro 支援", use_container_width=True):
-                     st.session_state.trigger_rescue = True
-                     st.toast("正在召喚 Jutor Pro (2.5) 專家...", icon="🔥")
-                     time.sleep(1)
-                     st.rerun()
+        st.markdown("")
+        st.markdown("---")
+        
+        # --- 新增：錯誤回報按鈕 ---
+        # 如果不是 Pro 模式，顯示「回報給 Jutor」
+        # 如果已經是 Pro 模式，也顯示這個，讓老師介入
+        
+        report_col1, report_col2 = st.columns([1, 4])
+        with report_col2:
+             if st.button("🚨 答案有錯，回報給Jutor本人", use_container_width=True, type="secondary"):
+                 # 發送 Telegram 通知
+                 success = send_telegram_alert(
+                     selected_grade, 
+                     st.session_state.image_desc_cache, 
+                     st.session_state.full_text_cache
+                 )
+                 if success:
+                     st.toast("已收到您的回覆，我們正在請 Jutor 本人下凡處理，請先繼續寫別題吧！", icon="📨")
+                     st.balloons()
+                 else:
+                     st.error("回報失敗，請檢查網路或通知老師。")
