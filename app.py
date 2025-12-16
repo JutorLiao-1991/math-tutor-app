@@ -100,14 +100,13 @@ def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
         st.cache_resource.clear()
         return False
 
-# --- Telegram 回報函式 (修復：直接接收 Bytes) ---
+# --- Telegram 回報函式 (含圖片) ---
 def send_telegram_alert(grade, question_desc, ai_response, student_comment, image_bytes=None):
     try:
         if "telegram" in st.secrets:
             token = st.secrets["telegram"]["bot_token"]
             chat_id = st.secrets["telegram"]["chat_id"]
             
-            # 1. 先傳圖片 (如果有)
             if image_bytes:
                 try:
                     files = {'photo': image_bytes}
@@ -116,7 +115,6 @@ def send_telegram_alert(grade, question_desc, ai_response, student_comment, imag
                 except Exception as img_err:
                     print(f"圖片發送失敗: {img_err}")
 
-            # 2. 再傳詳細文字報告
             message = f"""
 🚨 **Jutor 錯誤回報** 🚨
 -----------------------
@@ -161,7 +159,7 @@ if 'used_key_suffix' not in st.session_state: st.session_state.used_key_suffix =
 if 'image_desc_cache' not in st.session_state: st.session_state.image_desc_cache = "" 
 if 'full_text_cache' not in st.session_state: st.session_state.full_text_cache = ""   
 if 'is_reporting' not in st.session_state: st.session_state.is_reporting = False
-if 'uploaded_file_bytes' not in st.session_state: st.session_state.uploaded_file_bytes = None # 新增：全域存檔圖片
+if 'uploaded_file_bytes' not in st.session_state: st.session_state.uploaded_file_bytes = None
 
 # --- 函數區 ---
 def trigger_vibration():
@@ -247,7 +245,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v8.0 (修復圖片變數 12/16)")
+    st.caption("Jutor AI 教學系統 v8.1 (程式碼亂碼修復版 12/16)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -296,8 +294,6 @@ if not st.session_state.is_solving:
                 
                 with st.spinner(loading_text):
                     try:
-                        # --- 重要修正：將圖片 Bytes 存入 Session State ---
-                        # 這樣即使畫面重整，檔案內容也不會消失
                         if uploaded_file is not None:
                             st.session_state.uploaded_file_bytes = uploaded_file.getvalue()
 
@@ -309,6 +305,7 @@ if not st.session_state.is_solving:
                         2. **禁止 Markdown Code**：嚴禁使用反引號 `...` 來包裹數學式。
                         3. **列表控制**：除非是列舉不同選項，否則不要使用 Bullet Points 來顯示單一數值。
                         4. **直式計算**：只有在長算式推導時，才使用換行對齊。
+                        5. **程式碼隱藏**：絕對禁止在回覆的文字內容中顯示 Python 程式碼 (如 `plt.plot`, `np.array` 等)。程式碼只能出現在 `===PLOT===` 區塊內。
                         """
                         plotting = """
                         【繪圖能力啟動】
@@ -381,6 +378,11 @@ if not st.session_state.is_solving:
                             st.session_state.full_text_cache = full_text
 
                             plot_code = None
+                            
+                            # --- 標籤防呆與程式碼提取 ---
+                            if "===PLOT===" in full_text and "===PLOT_END===" not in full_text:
+                                full_text += "\n===PLOT_END===" # 自動補尾巴
+                                
                             plot_match = re.search(r"===PLOT===(.*?)===PLOT_END===", full_text, re.DOTALL)
                             if plot_match:
                                 plot_code = plot_match.group(1).strip()
@@ -434,7 +436,6 @@ if st.session_state.is_solving and st.session_state.solution_steps:
 
     total_steps = len(st.session_state.solution_steps)
     
-    # --- 回報區塊邏輯 ---
     if st.session_state.is_reporting:
         st.markdown("---")
         with st.container(border=True):
@@ -451,13 +452,12 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                     if not student_comment:
                         st.warning("請稍微描述一下問題喔！")
                     else:
-                        # 使用存檔的 Bytes 傳送
                         success = send_telegram_alert(
                              selected_grade, 
                              st.session_state.image_desc_cache, 
                              st.session_state.full_text_cache,
                              student_comment,
-                             st.session_state.uploaded_file_bytes # <--- 修復點
+                             st.session_state.uploaded_file_bytes
                         )
                         if success:
                             st.session_state.is_reporting = False
@@ -468,7 +468,6 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                         else:
                             st.error("發送失敗")
 
-    # --- 正常導航邏輯 ---
     elif st.session_state.step_index < total_steps - 1:
         if not st.session_state.in_qa_mode:
             st.markdown("---")
@@ -547,30 +546,27 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.session_state.plot_code = None
                 st.session_state.use_pro_model = False
                 st.session_state.is_reporting = False
-                st.session_state.uploaded_file_bytes = None # 清空
+                st.session_state.uploaded_file_bytes = None
                 st.rerun()
 
-    # --- 新增：智能回報按鈕 (邏輯：偵測到「本題答案」後才顯示) ---
     if not st.session_state.is_reporting:
-        # 1. 搜尋「本題答案」在哪一個步驟
         answer_step_index = -1
         for idx, step_content in enumerate(st.session_state.solution_steps):
             if "本題答案" in step_content:
                 answer_step_index = idx
                 break
         
-        # 2. 只有當目前步驟 >= 答案步驟時，才顯示回報鈕
         should_show_report = False
         if answer_step_index != -1:
             if st.session_state.step_index >= answer_step_index:
                 should_show_report = True
-        elif st.session_state.step_index == total_steps - 1: # 防呆
+        elif st.session_state.step_index == total_steps - 1:
             should_show_report = True
 
         if should_show_report:
             st.markdown("")
             st.markdown("")
-            with st.container(border=True): # 使用 Container 做出視覺區隔
+            with st.container(border=True):
                 st.markdown("#### 🚨 覺得答案怪怪的？")
                 if st.button("回報錯誤給 Jutor", use_container_width=True, type="secondary"):
                     st.session_state.is_reporting = True
