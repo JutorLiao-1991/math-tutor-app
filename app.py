@@ -9,7 +9,7 @@ import re
 import gspread
 import requests
 from google.oauth2.service_account import Credentials
-from datetime import datetime
+from datetime import datetime, timedelta  # 新增 timedelta
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import numpy as np
@@ -25,7 +25,7 @@ assistant_avatar = "🦔"
 st.set_page_config(page_title="鳩特數理-AI Jutor", page_icon=page_icon_set, layout="centered")
 
 # ==========================================
-# 🔓 登入機制已移除 (v7.4/v7.6)
+# 🔓 登入機制已移除 (開放存取版)
 # ==========================================
 
 # --- 注入自定義 CSS ---
@@ -98,8 +98,12 @@ def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
         client = get_google_sheet_client()
         if client:
             sheet = client.open("Jutor_Learning_Data").sheet1
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            # 維持倒敘排列 (插入在標題下方)
+            
+            # --- 時間校正：UTC + 8 小時 (台灣時間) ---
+            tw_time = datetime.now() + timedelta(hours=8)
+            timestamp = tw_time.strftime("%Y-%m-%d %H:%M:%S")
+            
+            # 維持倒敘排列
             sheet.insert_row([timestamp, grade, mode, image_desc, full_response, key_info], index=2)
             return True
     except Exception as e:
@@ -116,7 +120,7 @@ def send_telegram_alert(grade, question_desc, ai_response, student_comment):
             message = f"""
 🚨 **Jutor 錯誤回報** 🚨
 -----------------------
-📅 時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+📅 時間: {(datetime.now() + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')}
 🎓 年級: {grade}
 🗣️ **學生意見:** {student_comment}
 
@@ -183,18 +187,15 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 【排版修復 v7.6：新增綠色代碼轉LaTeX功能】 ---
+# --- 排版修復 v5 (自動修復數學顯示) ---
 def clean_output_format(text):
     if not text: return text
-    
-    # 0. 清除雜質
     text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
     
-    # 1. 【新增】將 Markdown Inline Code (`x=1`) 強制轉為 LaTeX ($x=1$)
-    # 這行正則表達式會抓取被單引號包住的內容，只要不是多行程式碼(```)，就把它變成數學公式
+    # 1. 綠色代碼轉 LaTeX
     text = re.sub(r'(?<!`)`([^`\n]+)`(?!`)', r'$\1$', text)
 
-    # 2. Block Math 轉 Inline Math
+    # 2. Block Math 轉 Inline
     def block_to_inline(match):
         content = match.group(1)
         if len(content) < 50 and '\\\\' not in content and 'align' not in content:
@@ -202,11 +203,9 @@ def clean_output_format(text):
         return match.group(0)
     text = re.sub(r'\$\$([\s\S]*?)\$\$', block_to_inline, text)
     
-    # 3. 括號與標點修復
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
     
-    # 4. 中文黏合劑
     cjk = r'[\u4e00-\u9fa5]'
     short_content = r'(?:(?!\n|•|- |\* ).){1,30}' 
     for _ in range(2):
@@ -255,7 +254,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v7.6 (數學排版修復版 12/16)")
+    st.caption("Jutor AI 教學系統 v7.7 (台灣時間校正版 12/16)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
