@@ -52,13 +52,6 @@ def inject_custom_css():
             h3 { font-size: 1.2rem !important; }
             .katex { font-size: 1.1em !important; }
         }
-        /* 讓回報按鈕區塊有點間距 */
-        .report-container {
-            margin-top: 20px;
-            border: 1px solid #ff4b4b;
-            border-radius: 10px;
-            padding: 10px;
-        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -107,24 +100,23 @@ def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
         st.cache_resource.clear()
         return False
 
-# --- Telegram 回報函式 (含圖片) ---
-def send_telegram_alert(grade, question_desc, ai_response, student_comment, image_file=None):
+# --- Telegram 回報函式 (修復：直接接收 Bytes) ---
+def send_telegram_alert(grade, question_desc, ai_response, student_comment, image_bytes=None):
     try:
         if "telegram" in st.secrets:
             token = st.secrets["telegram"]["bot_token"]
             chat_id = st.secrets["telegram"]["chat_id"]
             
-            # 1. 先傳圖片
-            if image_file:
+            # 1. 先傳圖片 (如果有)
+            if image_bytes:
                 try:
-                    image_file.seek(0) 
-                    files = {'photo': image_file.getvalue()}
+                    files = {'photo': image_bytes}
                     data = {'chat_id': chat_id, 'caption': f"📸 學生上傳的原題 ({grade})"}
                     requests.post(f"https://api.telegram.org/bot{token}/sendPhoto", data=data, files=files)
                 except Exception as img_err:
                     print(f"圖片發送失敗: {img_err}")
 
-            # 2. 再傳文字
+            # 2. 再傳詳細文字報告
             message = f"""
 🚨 **Jutor 錯誤回報** 🚨
 -----------------------
@@ -169,6 +161,7 @@ if 'used_key_suffix' not in st.session_state: st.session_state.used_key_suffix =
 if 'image_desc_cache' not in st.session_state: st.session_state.image_desc_cache = "" 
 if 'full_text_cache' not in st.session_state: st.session_state.full_text_cache = ""   
 if 'is_reporting' not in st.session_state: st.session_state.is_reporting = False
+if 'uploaded_file_bytes' not in st.session_state: st.session_state.uploaded_file_bytes = None # 新增：全域存檔圖片
 
 # --- 函數區 ---
 def trigger_vibration():
@@ -254,7 +247,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v8.0 (智能回報顯示版 12/16)")
+    st.caption("Jutor AI 教學系統 v8.0 (修復圖片變數 12/16)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -303,6 +296,11 @@ if not st.session_state.is_solving:
                 
                 with st.spinner(loading_text):
                     try:
+                        # --- 重要修正：將圖片 Bytes 存入 Session State ---
+                        # 這樣即使畫面重整，檔案內容也不會消失
+                        if uploaded_file is not None:
+                            st.session_state.uploaded_file_bytes = uploaded_file.getvalue()
+
                         guardrail = "【過濾機制】請辨識圖片內容。若明顯為「自拍照、風景照、寵物照」等與學習無關的圖片，請回傳 REFUSE_OFF_TOPIC。若是數學題目、文字截圖、圖表分析，即使模糊或非典型格式，也請回答。"
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
                         formatting = """
@@ -436,7 +434,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
 
     total_steps = len(st.session_state.solution_steps)
     
-    # --- 回報區塊邏輯 (置於最上方優先處理) ---
+    # --- 回報區塊邏輯 ---
     if st.session_state.is_reporting:
         st.markdown("---")
         with st.container(border=True):
@@ -453,12 +451,13 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                     if not student_comment:
                         st.warning("請稍微描述一下問題喔！")
                     else:
+                        # 使用存檔的 Bytes 傳送
                         success = send_telegram_alert(
                              selected_grade, 
                              st.session_state.image_desc_cache, 
                              st.session_state.full_text_cache,
                              student_comment,
-                             uploaded_file
+                             st.session_state.uploaded_file_bytes # <--- 修復點
                         )
                         if success:
                             st.session_state.is_reporting = False
@@ -548,6 +547,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.session_state.plot_code = None
                 st.session_state.use_pro_model = False
                 st.session_state.is_reporting = False
+                st.session_state.uploaded_file_bytes = None # 清空
                 st.rerun()
 
     # --- 新增：智能回報按鈕 (邏輯：偵測到「本題答案」後才顯示) ---
@@ -560,12 +560,11 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 break
         
         # 2. 只有當目前步驟 >= 答案步驟時，才顯示回報鈕
-        # (若找不到本題答案，則預設不顯示，或只在最後一頁顯示)
         should_show_report = False
         if answer_step_index != -1:
             if st.session_state.step_index >= answer_step_index:
                 should_show_report = True
-        elif st.session_state.step_index == total_steps - 1: # 防呆：若沒抓到關鍵字，至少最後一頁要給按
+        elif st.session_state.step_index == total_steps - 1: # 防呆
             should_show_report = True
 
         if should_show_report:
