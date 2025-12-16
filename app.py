@@ -52,6 +52,13 @@ def inject_custom_css():
             h3 { font-size: 1.2rem !important; }
             .katex { font-size: 1.1em !important; }
         }
+        /* 讓回報按鈕區塊有點間距 */
+        .report-container {
+            margin-top: 20px;
+            border: 1px solid #ff4b4b;
+            border-radius: 10px;
+            padding: 10px;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -100,14 +107,14 @@ def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
         st.cache_resource.clear()
         return False
 
-# --- Telegram 回報函式 ---
+# --- Telegram 回報函式 (含圖片) ---
 def send_telegram_alert(grade, question_desc, ai_response, student_comment, image_file=None):
     try:
         if "telegram" in st.secrets:
             token = st.secrets["telegram"]["bot_token"]
             chat_id = st.secrets["telegram"]["chat_id"]
             
-            # 1. 先傳圖片 (如果有)
+            # 1. 先傳圖片
             if image_file:
                 try:
                     image_file.seek(0) 
@@ -117,7 +124,7 @@ def send_telegram_alert(grade, question_desc, ai_response, student_comment, imag
                 except Exception as img_err:
                     print(f"圖片發送失敗: {img_err}")
 
-            # 2. 再傳詳細文字報告
+            # 2. 再傳文字
             message = f"""
 🚨 **Jutor 錯誤回報** 🚨
 -----------------------
@@ -247,7 +254,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v7.9 (修復 style 變數 12/16)")
+    st.caption("Jutor AI 教學系統 v8.0 (智能回報顯示版 12/16)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -318,7 +325,6 @@ if not st.session_state.is_solving:
                         if selected_grade in ["小五", "小六"]:
                             common_role += "【重要】學生為台灣國小生，請嚴格遵守台灣國小數學課綱：1. 避免使用二元一次聯立方程式或過於抽象的代數符號(x,y)。2. 多使用「線段圖」、「基準量比較量」或具體數字推演來解釋。3. 語言要更白話、具體。"
 
-                        # --- 修復：補回 style 定義 ---
                         if mode == "verbal":
                             style = "風格：幽默口語、譬喻教學、步驟化。"
                         else:
@@ -430,7 +436,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
 
     total_steps = len(st.session_state.solution_steps)
     
-    # --- 回報區塊邏輯 ---
+    # --- 回報區塊邏輯 (置於最上方優先處理) ---
     if st.session_state.is_reporting:
         st.markdown("---")
         with st.container(border=True):
@@ -544,12 +550,29 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.session_state.is_reporting = False
                 st.rerun()
 
-    # --- 新增：全域錯誤回報按鈕 (只要不是正在填寫回報單，就顯示在最下方) ---
+    # --- 新增：智能回報按鈕 (邏輯：偵測到「本題答案」後才顯示) ---
     if not st.session_state.is_reporting:
-        st.markdown("")
-        st.markdown("---")
-        report_col1, report_col2 = st.columns([1, 4])
-        with report_col2:
-             if st.button("🚨 答案有錯，回報給鳩特", use_container_width=True, type="secondary"):
-                 st.session_state.is_reporting = True
-                 st.rerun()
+        # 1. 搜尋「本題答案」在哪一個步驟
+        answer_step_index = -1
+        for idx, step_content in enumerate(st.session_state.solution_steps):
+            if "本題答案" in step_content:
+                answer_step_index = idx
+                break
+        
+        # 2. 只有當目前步驟 >= 答案步驟時，才顯示回報鈕
+        # (若找不到本題答案，則預設不顯示，或只在最後一頁顯示)
+        should_show_report = False
+        if answer_step_index != -1:
+            if st.session_state.step_index >= answer_step_index:
+                should_show_report = True
+        elif st.session_state.step_index == total_steps - 1: # 防呆：若沒抓到關鍵字，至少最後一頁要給按
+            should_show_report = True
+
+        if should_show_report:
+            st.markdown("")
+            st.markdown("")
+            with st.container(border=True): # 使用 Container 做出視覺區隔
+                st.markdown("#### 🚨 覺得答案怪怪的？")
+                if st.button("回報錯誤給 Jutor", use_container_width=True, type="secondary"):
+                    st.session_state.is_reporting = True
+                    st.rerun()
