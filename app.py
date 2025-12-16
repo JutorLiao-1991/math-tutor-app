@@ -100,7 +100,7 @@ def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
         st.cache_resource.clear()
         return False
 
-# --- Telegram 回報函式 (新增：傳送圖片功能) ---
+# --- Telegram 回報函式 ---
 def send_telegram_alert(grade, question_desc, ai_response, student_comment, image_file=None):
     try:
         if "telegram" in st.secrets:
@@ -110,7 +110,6 @@ def send_telegram_alert(grade, question_desc, ai_response, student_comment, imag
             # 1. 先傳圖片 (如果有)
             if image_file:
                 try:
-                    # 重置檔案指標，確保從頭讀取
                     image_file.seek(0) 
                     files = {'photo': image_file.getvalue()}
                     data = {'chat_id': chat_id, 'caption': f"📸 學生上傳的原題 ({grade})"}
@@ -248,7 +247,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v7.8 (圖片回報+全域按鈕 12/16)")
+    st.caption("Jutor AI 教學系統 v7.9 (修復 style 變數 12/16)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -318,6 +317,12 @@ if not st.session_state.is_solving:
                         common_role = f"角色：你是 Jutor。年級：{selected_grade}。題目：{question_target}。"
                         if selected_grade in ["小五", "小六"]:
                             common_role += "【重要】學生為台灣國小生，請嚴格遵守台灣國小數學課綱：1. 避免使用二元一次聯立方程式或過於抽象的代數符號(x,y)。2. 多使用「線段圖」、「基準量比較量」或具體數字推演來解釋。3. 語言要更白話、具體。"
+
+                        # --- 修復：補回 style 定義 ---
+                        if mode == "verbal":
+                            style = "風格：幽默口語、譬喻教學、步驟化。"
+                        else:
+                            style = "風格：純算式、LaTeX、極簡。"
 
                         prompt = f"""
                         {guardrail}
@@ -425,7 +430,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
 
     total_steps = len(st.session_state.solution_steps)
     
-    # --- 回報區塊邏輯 (置於最上方優先處理) ---
+    # --- 回報區塊邏輯 ---
     if st.session_state.is_reporting:
         st.markdown("---")
         with st.container(border=True):
@@ -442,13 +447,12 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                     if not student_comment:
                         st.warning("請稍微描述一下問題喔！")
                     else:
-                        # 傳送圖片 (uploaded_file)
                         success = send_telegram_alert(
                              selected_grade, 
                              st.session_state.image_desc_cache, 
                              st.session_state.full_text_cache,
                              student_comment,
-                             uploaded_file # 傳入圖片檔案
+                             uploaded_file
                         )
                         if success:
                             st.session_state.is_reporting = False
