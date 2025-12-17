@@ -100,14 +100,13 @@ def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
         st.cache_resource.clear()
         return False
 
-# --- Telegram 回報函式 (新增 student_name 參數) ---
+# --- Telegram 回報函式 ---
 def send_telegram_alert(grade, question_desc, ai_response, student_comment, student_name, image_bytes=None):
     try:
         if "telegram" in st.secrets:
             token = st.secrets["telegram"]["bot_token"]
             chat_id = st.secrets["telegram"]["chat_id"]
             
-            # 1. 先傳圖片
             if image_bytes:
                 try:
                     files = {'photo': image_bytes}
@@ -116,7 +115,6 @@ def send_telegram_alert(grade, question_desc, ai_response, student_comment, stud
                 except Exception as img_err:
                     print(f"圖片發送失敗: {img_err}")
 
-            # 2. 再傳文字 (包含學生姓名)
             message = f"""
 🚨 **Jutor 錯誤回報** 🚨
 -----------------------
@@ -189,23 +187,47 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
+# --- 強力排版修復 v6 (新增：向量修復 & 程式碼消音) ---
 def clean_output_format(text):
     if not text: return text
     text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
+    
+    # 1. 綠色代碼轉 LaTeX
     text = re.sub(r'(?<!`)`([^`\n]+)`(?!`)', r'$\1$', text)
+
+    # 2. Block Math 轉 Inline
     def block_to_inline(match):
         content = match.group(1)
         if len(content) < 50 and '\\\\' not in content and 'align' not in content:
             return f"${content.strip()}$"
         return match.group(0)
     text = re.sub(r'\$\$([\s\S]*?)\$\$', block_to_inline, text)
+    
+    # 3. 裸奔向量修復 (\vec{...} 沒加 $)
+    text = re.sub(r'(?<!\$)\\vec\{[^}]+\}(?!\$)', r'$\g<0>$', text)
+    
+    # 4. 裸奔分數修復 (\frac{...} 沒加 $)
+    text = re.sub(r'(?<!\$)\\frac\{[^}]+\}\{[^}]+\}(?!\$)', r'$\g<0>$', text)
+
+    # 5. 程式碼洩漏消音 (若文字中出現 plt.xxx 則刪除該行)
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        if "plt." in line or "np." in line or "matplotlib" in line:
+            continue # 跳過程式碼行
+        cleaned_lines.append(line)
+    text = "\n".join(cleaned_lines)
+
+    # 6. 基本修復
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
+    
     cjk = r'[\u4e00-\u9fa5]'
     short_content = r'(?:(?!\n|•|- |\* ).){1,30}' 
     for _ in range(2):
         pattern = f'(?<={cjk})\s*\\n+\s*({short_content})\s*\\n+\s*(?={cjk}|[，。！？：,.?])'
         text = re.sub(pattern, r' \1 ', text)
+    
     return text
 
 def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
@@ -248,7 +270,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v8.2 (具名回報版 12/17)")
+    st.caption("Jutor AI 教學系統 v8.3 (向量與程式碼修復版 12/17)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -308,6 +330,7 @@ if not st.session_state.is_solving:
                         2. **禁止 Markdown Code**：嚴禁使用反引號 `...` 來包裹數學式。
                         3. **列表控制**：除非是列舉不同選項，否則不要使用 Bullet Points 來顯示單一數值。
                         4. **直式計算**：只有在長算式推導時，才使用換行對齊。
+                        5. **禁止洩漏程式碼**：絕對禁止在文字解說中印出 Python 程式碼 (如 `plt.plot`, `np.array` 等)。若要繪圖，程式碼只能出現在 `===PLOT===` 區塊內。
                         """
                         plotting = """
                         【繪圖能力啟動】
@@ -437,16 +460,12 @@ if st.session_state.is_solving and st.session_state.solution_steps:
 
     total_steps = len(st.session_state.solution_steps)
     
-    # --- 回報區塊邏輯 (新增姓名輸入) ---
+    # --- 回報區塊 ---
     if st.session_state.is_reporting:
         st.markdown("---")
         with st.container(border=True):
             st.markdown("### 🚨 錯誤回報")
-            
-            # 姓名欄位
             student_name = st.text_input("請輸入你的名字 (方便老師回覆你)：", placeholder="例如：王小明")
-            
-            # 意見欄位
             student_comment = st.text_area("請告訴 Jutor 哪裡怪怪的？", height=100)
             
             c1, c2 = st.columns(2)
@@ -464,7 +483,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                              st.session_state.image_desc_cache, 
                              st.session_state.full_text_cache,
                              student_comment,
-                             student_name,  # 傳入姓名
+                             student_name,
                              st.session_state.uploaded_file_bytes
                         )
                         if success:
