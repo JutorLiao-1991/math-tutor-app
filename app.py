@@ -100,26 +100,29 @@ def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
         st.cache_resource.clear()
         return False
 
-# --- Telegram 回報函式 (含圖片) ---
-def send_telegram_alert(grade, question_desc, ai_response, student_comment, image_bytes=None):
+# --- Telegram 回報函式 (新增 student_name 參數) ---
+def send_telegram_alert(grade, question_desc, ai_response, student_comment, student_name, image_bytes=None):
     try:
         if "telegram" in st.secrets:
             token = st.secrets["telegram"]["bot_token"]
             chat_id = st.secrets["telegram"]["chat_id"]
             
+            # 1. 先傳圖片
             if image_bytes:
                 try:
                     files = {'photo': image_bytes}
-                    data = {'chat_id': chat_id, 'caption': f"📸 學生上傳的原題 ({grade})"}
+                    data = {'chat_id': chat_id, 'caption': f"📸 {student_name} 上傳的原題 ({grade})"}
                     requests.post(f"https://api.telegram.org/bot{token}/sendPhoto", data=data, files=files)
                 except Exception as img_err:
                     print(f"圖片發送失敗: {img_err}")
 
+            # 2. 再傳文字 (包含學生姓名)
             message = f"""
 🚨 **Jutor 錯誤回報** 🚨
 -----------------------
 📅 時間: {(datetime.now() + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')}
 🎓 年級: {grade}
+👤 **回報學生:** {student_name}
 🗣️ **學生意見:** {student_comment}
 
 📝 題目描述: {question_desc[:100]}...
@@ -245,7 +248,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v8.1 (程式碼亂碼修復版 12/16)")
+    st.caption("Jutor AI 教學系統 v8.2 (具名回報版 12/17)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -305,7 +308,6 @@ if not st.session_state.is_solving:
                         2. **禁止 Markdown Code**：嚴禁使用反引號 `...` 來包裹數學式。
                         3. **列表控制**：除非是列舉不同選項，否則不要使用 Bullet Points 來顯示單一數值。
                         4. **直式計算**：只有在長算式推導時，才使用換行對齊。
-                        5. **程式碼隱藏**：絕對禁止在回覆的文字內容中顯示 Python 程式碼 (如 `plt.plot`, `np.array` 等)。程式碼只能出現在 `===PLOT===` 區塊內。
                         """
                         plotting = """
                         【繪圖能力啟動】
@@ -379,9 +381,8 @@ if not st.session_state.is_solving:
 
                             plot_code = None
                             
-                            # --- 標籤防呆與程式碼提取 ---
                             if "===PLOT===" in full_text and "===PLOT_END===" not in full_text:
-                                full_text += "\n===PLOT_END===" # 自動補尾巴
+                                full_text += "\n===PLOT_END==="
                                 
                             plot_match = re.search(r"===PLOT===(.*?)===PLOT_END===", full_text, re.DOTALL)
                             if plot_match:
@@ -436,11 +437,17 @@ if st.session_state.is_solving and st.session_state.solution_steps:
 
     total_steps = len(st.session_state.solution_steps)
     
+    # --- 回報區塊邏輯 (新增姓名輸入) ---
     if st.session_state.is_reporting:
         st.markdown("---")
         with st.container(border=True):
             st.markdown("### 🚨 錯誤回報")
-            student_comment = st.text_area("請告訴 Jutor 哪裡怪怪的？(例如：第二行算錯了、這題答案應該是 100...)", height=100)
+            
+            # 姓名欄位
+            student_name = st.text_input("請輸入你的名字 (方便老師回覆你)：", placeholder="例如：王小明")
+            
+            # 意見欄位
+            student_comment = st.text_area("請告訴 Jutor 哪裡怪怪的？", height=100)
             
             c1, c2 = st.columns(2)
             with c1:
@@ -449,14 +456,15 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                     st.rerun()
             with c2:
                 if st.button("確認送出", type="primary", use_container_width=True):
-                    if not student_comment:
-                        st.warning("請稍微描述一下問題喔！")
+                    if not student_comment or not student_name:
+                        st.warning("請填寫名字和問題描述喔！")
                     else:
                         success = send_telegram_alert(
                              selected_grade, 
                              st.session_state.image_desc_cache, 
                              st.session_state.full_text_cache,
                              student_comment,
+                             student_name,  # 傳入姓名
                              st.session_state.uploaded_file_bytes
                         )
                         if success:
