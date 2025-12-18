@@ -100,13 +100,14 @@ def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
         st.cache_resource.clear()
         return False
 
-# --- Telegram 回報函式 ---
+# --- Telegram 回報函式 (修正版：放寬字數限制) ---
 def send_telegram_alert(grade, question_desc, ai_response, student_comment, student_name, image_bytes=None):
     try:
         if "telegram" in st.secrets:
             token = st.secrets["telegram"]["bot_token"]
             chat_id = st.secrets["telegram"]["chat_id"]
             
+            # 1. 先傳圖片
             if image_bytes:
                 try:
                     files = {'photo': image_bytes}
@@ -114,6 +115,12 @@ def send_telegram_alert(grade, question_desc, ai_response, student_comment, stud
                     requests.post(f"https://api.telegram.org/bot{token}/sendPhoto", data=data, files=files)
                 except Exception as img_err:
                     print(f"圖片發送失敗: {img_err}")
+
+            # 2. 再傳文字 (限制放寬至 3500 字，Telegram 上限約 4096)
+            # 如果超過 3500，還是要截斷以免發送失敗
+            safe_response = ai_response[:3500] 
+            if len(ai_response) > 3500:
+                safe_response += "\n...(後續內容過長，請至 Sheet 查看)"
 
             message = f"""
 🚨 **Jutor 錯誤回報** 🚨
@@ -125,7 +132,7 @@ def send_telegram_alert(grade, question_desc, ai_response, student_comment, stud
 
 📝 題目描述: {question_desc[:100]}...
 🤖 **AI 的回答:**
-{ai_response[:300]}... (內容過長截斷)
+{safe_response}
 -----------------------
             """
             
@@ -187,7 +194,7 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 強力排版修復 v6 (新增：向量修復 & 程式碼消音) ---
+# --- 強力排版修復 v7 (程式碼消音+向量修復) ---
 def clean_output_format(text):
     if not text: return text
     text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
@@ -203,31 +210,28 @@ def clean_output_format(text):
         return match.group(0)
     text = re.sub(r'\$\$([\s\S]*?)\$\$', block_to_inline, text)
     
-    # 3. 裸奔向量修復 (\vec{...} 沒加 $)
+    # 3. 裸奔向量/分數修復
     text = re.sub(r'(?<!\$)\\vec\{[^}]+\}(?!\$)', r'$\g<0>$', text)
-    
-    # 4. 裸奔分數修復 (\frac{...} 沒加 $)
     text = re.sub(r'(?<!\$)\\frac\{[^}]+\}\{[^}]+\}(?!\$)', r'$\g<0>$', text)
 
-    # 5. 程式碼洩漏消音 (若文字中出現 plt.xxx 則刪除該行)
+    # 4. 程式碼洩漏消音
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
+        # 過濾掉明顯的 Python 繪圖代碼
         if "plt." in line or "np." in line or "matplotlib" in line:
-            continue # 跳過程式碼行
+            continue 
         cleaned_lines.append(line)
     text = "\n".join(cleaned_lines)
 
-    # 6. 基本修復
+    # 5. 基本符號修復
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
-    
     cjk = r'[\u4e00-\u9fa5]'
     short_content = r'(?:(?!\n|•|- |\* ).){1,30}' 
     for _ in range(2):
         pattern = f'(?<={cjk})\s*\\n+\s*({short_content})\s*\\n+\s*(?={cjk}|[，。！？：,.?])'
         text = re.sub(pattern, r' \1 ', text)
-    
     return text
 
 def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
@@ -270,7 +274,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v8.3 (向量與程式碼修復版 12/17)")
+    st.caption("Jutor AI 教學系統 v8.4 (全文回報+終極修復 12/18)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
