@@ -100,14 +100,13 @@ def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
         st.cache_resource.clear()
         return False
 
-# --- Telegram 回報函式 (修正版：放寬字數限制) ---
+# --- Telegram 回報函式 ---
 def send_telegram_alert(grade, question_desc, ai_response, student_comment, student_name, image_bytes=None):
     try:
         if "telegram" in st.secrets:
             token = st.secrets["telegram"]["bot_token"]
             chat_id = st.secrets["telegram"]["chat_id"]
             
-            # 1. 先傳圖片
             if image_bytes:
                 try:
                     files = {'photo': image_bytes}
@@ -116,8 +115,6 @@ def send_telegram_alert(grade, question_desc, ai_response, student_comment, stud
                 except Exception as img_err:
                     print(f"圖片發送失敗: {img_err}")
 
-            # 2. 再傳文字 (限制放寬至 3500 字，Telegram 上限約 4096)
-            # 如果超過 3500，還是要截斷以免發送失敗
             safe_response = ai_response[:3500] 
             if len(ai_response) > 3500:
                 safe_response += "\n...(後續內容過長，請至 Sheet 查看)"
@@ -194,37 +191,25 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 強力排版修復 v7 (程式碼消音+向量修復) ---
 def clean_output_format(text):
     if not text: return text
     text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
-    
-    # 1. 綠色代碼轉 LaTeX
     text = re.sub(r'(?<!`)`([^`\n]+)`(?!`)', r'$\1$', text)
-
-    # 2. Block Math 轉 Inline
     def block_to_inline(match):
         content = match.group(1)
         if len(content) < 50 and '\\\\' not in content and 'align' not in content:
             return f"${content.strip()}$"
         return match.group(0)
     text = re.sub(r'\$\$([\s\S]*?)\$\$', block_to_inline, text)
-    
-    # 3. 裸奔向量/分數修復
     text = re.sub(r'(?<!\$)\\vec\{[^}]+\}(?!\$)', r'$\g<0>$', text)
     text = re.sub(r'(?<!\$)\\frac\{[^}]+\}\{[^}]+\}(?!\$)', r'$\g<0>$', text)
-
-    # 4. 程式碼洩漏消音
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
-        # 過濾掉明顯的 Python 繪圖代碼
         if "plt." in line or "np." in line or "matplotlib" in line:
             continue 
         cleaned_lines.append(line)
     text = "\n".join(cleaned_lines)
-
-    # 5. 基本符號修復
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
     cjk = r'[\u4e00-\u9fa5]'
@@ -274,7 +259,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v8.4 (全文回報+終極修復 12/18)")
+    st.caption("Jutor AI 教學系統 v8.7 (索引防崩潰版 12/19)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -452,6 +437,10 @@ if st.session_state.is_solving and st.session_state.solution_steps:
     if st.session_state.plot_code:
         with st.expander("📊 查看幾何/函數圖形", expanded=True):
             execute_and_show_plot(st.session_state.plot_code)
+
+    # --- v8.7 修復：頁碼防呆 ---
+    if st.session_state.step_index >= len(st.session_state.solution_steps):
+        st.session_state.step_index = 0
 
     for i in range(st.session_state.step_index):
         with st.chat_message("assistant", avatar=assistant_avatar):
