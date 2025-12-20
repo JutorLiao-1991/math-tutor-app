@@ -191,18 +191,34 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
+# --- 強力排版修復 v8 (針對矩陣紅字、三角函數、向量修復) ---
 def clean_output_format(text):
     if not text: return text
     text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
+    
+    # 1. 移除 Markdown Code Block (避免 ```latex ... ``` 造成不渲染)
+    text = re.sub(r'```[a-zA-Z]*\n([\s\S]*?)\n```', r'\1', text)
+
+    # 2. 綠色/紅色代碼轉 LaTeX (將 `...` 轉為 $...$)
+    # 這是解決紅色字體的關鍵
     text = re.sub(r'(?<!`)`([^`\n]+)`(?!`)', r'$\1$', text)
+
+    # 3. Block Math 轉 Inline (Streamlit 有時對 $$ 支援不穩，轉為 $)
     def block_to_inline(match):
         content = match.group(1)
         if len(content) < 50 and '\\\\' not in content and 'align' not in content:
             return f"${content.strip()}$"
         return match.group(0)
     text = re.sub(r'\$\$([\s\S]*?)\$\$', block_to_inline, text)
-    text = re.sub(r'(?<!\$)\\vec\{[^}]+\}(?!\$)', r'$\g<0>$', text)
-    text = re.sub(r'(?<!\$)\\frac\{[^}]+\}\{[^}]+\}(?!\$)', r'$\g<0>$', text)
+    
+    # 4. 裸奔矩陣/環境修復 (偵測到 \begin{...} 但沒被 $ 包圍)
+    text = re.sub(r'(?<!\$)(\\begin\{[a-z]+\}[\s\S]*?\\end\{[a-z]+\})(?!\$)', r'$$\1$$', text)
+
+    # 5. 裸奔常用數學關鍵字修復
+    # 包含：向量(vec), 分數(frac), 三角函數(sin/cos/tan), 極限(lim), 總和(sum), 積分(int)
+    text = re.sub(r'(?<!\$)(\\(?:vec|frac|sin|cos|tan|cot|lim|sum|int)\{?[^}]*}?)(?!\$)', r'$\1$', text)
+
+    # 6. 程式碼洩漏消音
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
@@ -210,6 +226,8 @@ def clean_output_format(text):
             continue 
         cleaned_lines.append(line)
     text = "\n".join(cleaned_lines)
+
+    # 7. 基本標點修復
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
     cjk = r'[\u4e00-\u9fa5]'
@@ -259,7 +277,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v8.7 (索引防崩潰版 12/19)")
+    st.caption("Jutor AI 教學系統 v8.8 (矩陣紅字修復版 12/19)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -315,279 +333,4 @@ if not st.session_state.is_solving:
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
                         formatting = """
                         【排版嚴格指令】
-                        1. **數學式強制 LaTeX**：所有算式、方程式(如 x^2+1=0)、變數(x, y)、數字運算，**務必**使用 `$ ... $` 包裹 (例如 `$x^2+x-1=0$` 或 `$3 \\times 4 = 12$`)。
-                        2. **禁止 Markdown Code**：嚴禁使用反引號 `...` 來包裹數學式。
-                        3. **列表控制**：除非是列舉不同選項，否則不要使用 Bullet Points 來顯示單一數值。
-                        4. **直式計算**：只有在長算式推導時，才使用換行對齊。
-                        5. **禁止洩漏程式碼**：絕對禁止在文字解說中印出 Python 程式碼 (如 `plt.plot`, `np.array` 等)。若要繪圖，程式碼只能出現在 `===PLOT===` 區塊內。
-                        """
-                        plotting = """
-                        【繪圖能力啟動】
-                        1. 只有當題目明確涉及「函數圖形」、「幾何座標」、「統計圖表」時，才生成 Python 程式碼。
-                        2. 程式碼必須能直接執行，並包在 `===PLOT===` 與 `===PLOT_END===` 之間。
-                        3. 圖表標題、座標軸請使用中文。
-                        4. ⚠️ 嚴格 LaTeX 規範：所有包含 LaTeX 語法的字串（如標題、標籤），**必須** 使用 Python raw string (例如 r'$y=x^2$')。
-                        5. ⚠️ 避免在 title 使用過於複雜的 LaTeX (如 \left, \right)，若必須使用，請確保語法完美閉合。
-                        6. ⚠️ 3D繪圖：若是空間坐標題，請務必使用 `ax = fig.add_subplot(111, projection='3d')`。
-                        """
-                        common_role = f"角色：你是 Jutor。年級：{selected_grade}。題目：{question_target}。"
-                        if selected_grade in ["小五", "小六"]:
-                            common_role += "【重要】學生為台灣國小生，請嚴格遵守台灣國小數學課綱：1. 避免使用二元一次聯立方程式或過於抽象的代數符號(x,y)。2. 多使用「線段圖」、「基準量比較量」或具體數字推演來解釋。3. 語言要更白話、具體。"
-
-                        if mode == "verbal":
-                            style = "風格：幽默口語、譬喻教學、步驟化。"
-                        else:
-                            style = "風格：純算式、LaTeX、極簡。"
-
-                        prompt = f"""
-                        {guardrail}
-                        {transcription}
-                        {formatting}
-                        {plotting}
-                        {common_role}
-                        {style}
-                        
-                        【題型辨識】請判斷是否為多選題，若有選出所有正確選項的指令，請逐一檢查。
-
-                        【輸出結構嚴格要求 - 請用 `===STEP===` 分隔】
-                        1. **解題過程** (為了避免資訊過載，請將過程拆解為 **4~6 個** 短步驟，每一步只講一個核心觀念)
-                        ===STEP===
-                        (步驟1...)
-                        ===STEP===
-                        (步驟2...)
-                        ===STEP===
-                        ...
-                        
-                        2. **本題答案** (標題與答案必須在同一個STEP)
-                        ### 💡 本題答案
-                        (請在此列出最終答案，如 x=16 或 x=18)
-                        
-                        ===STEP===
-                        
-                        3. **驗收類題** (標題與題目必須在同一個STEP)
-                        ### 🎯 驗收類題
-                        (請在此處直接出題，包含所有題目資訊)
-                        
-                        ===STEP===
-                        
-                        4. **類題答案** (最後一個STEP)
-                        🗝️ 類題答案
-                        (僅提供最終答案，不需詳解)
-                        """
-
-                        response, key_suffix = call_gemini_with_rotation(prompt, image, use_pro=use_pro)
-                        st.session_state.used_key_suffix = key_suffix
-                        
-                        if "REFUSE_OFF_TOPIC" in response.text:
-                            st.error("🙅‍♂️ 這個學校好像不會考喔！(若為誤判，請嘗試裁切圖片)")
-                        else:
-                            full_text = clean_output_format(response.text)
-                            image_desc = "無描述"
-                            desc_match = re.search(r"===DESC===(.*?)===DESC_END===", full_text, re.DOTALL)
-                            if desc_match:
-                                image_desc = desc_match.group(1).strip()
-                                full_text = full_text.replace(desc_match.group(0), "")
-                            
-                            st.session_state.image_desc_cache = image_desc
-                            st.session_state.full_text_cache = full_text
-
-                            plot_code = None
-                            
-                            if "===PLOT===" in full_text and "===PLOT_END===" not in full_text:
-                                full_text += "\n===PLOT_END==="
-                                
-                            plot_match = re.search(r"===PLOT===(.*?)===PLOT_END===", full_text, re.DOTALL)
-                            if plot_match:
-                                plot_code = plot_match.group(1).strip()
-                                plot_code = plot_code.replace("```python", "").replace("```", "")
-                                full_text = full_text.replace(plot_match.group(0), "")
-                            
-                            st.session_state.plot_code = plot_code
-                            
-                            raw_steps = full_text.split("===STEP===")
-                            st.session_state.solution_steps = [step.strip() for step in raw_steps if step.strip()]
-                            st.session_state.step_index = 0
-                            st.session_state.is_solving = True
-                            st.session_state.streaming_done = False
-                            st.session_state.in_qa_mode = False
-                            st.session_state.qa_history = []
-                            st.session_state.data_saved = False
-                            st.session_state.is_reporting = False
-
-                            save_to_google_sheets(selected_grade, mode, image_desc, full_text, key_suffix)
-                            st.rerun()
-
-                    except Exception as e:
-                        if "429" in str(e) or "Quota" in str(e): 
-                            st.warning("🥵 系統忙碌中...")
-                            st.error("請稍候重試！")
-                        else: st.error(f"錯誤：{e}")
-
-# ================= 解題互動 =================
-
-if st.session_state.is_solving and st.session_state.solution_steps:
-    
-    header_text = "🗣️ Jutor 口語教學中" if st.session_state.solve_mode == "verbal" else "🔢 純算式推導中"
-    
-    if st.session_state.use_pro_model:
-        st.markdown(f"### {header_text} (🔥 2.5 Pro 救援)")
-    else:
-        st.markdown(f"### {header_text}") 
-    
-    if st.session_state.plot_code:
-        with st.expander("📊 查看幾何/函數圖形", expanded=True):
-            execute_and_show_plot(st.session_state.plot_code)
-
-    # --- v8.7 修復：頁碼防呆 ---
-    if st.session_state.step_index >= len(st.session_state.solution_steps):
-        st.session_state.step_index = 0
-
-    for i in range(st.session_state.step_index):
-        with st.chat_message("assistant", avatar=assistant_avatar):
-            st.markdown(st.session_state.solution_steps[i])
-            
-    current_step_text = st.session_state.solution_steps[st.session_state.step_index]
-    with st.chat_message("assistant", avatar=assistant_avatar):
-        trigger_vibration()
-        st.markdown(current_step_text)
-
-    total_steps = len(st.session_state.solution_steps)
-    
-    # --- 回報區塊 ---
-    if st.session_state.is_reporting:
-        st.markdown("---")
-        with st.container(border=True):
-            st.markdown("### 🚨 錯誤回報")
-            student_name = st.text_input("請輸入你的名字 (方便老師回覆你)：", placeholder="例如：王小明")
-            student_comment = st.text_area("請告訴 Jutor 哪裡怪怪的？", height=100)
-            
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("取消", use_container_width=True):
-                    st.session_state.is_reporting = False
-                    st.rerun()
-            with c2:
-                if st.button("確認送出", type="primary", use_container_width=True):
-                    if not student_comment or not student_name:
-                        st.warning("請填寫名字和問題描述喔！")
-                    else:
-                        success = send_telegram_alert(
-                             selected_grade, 
-                             st.session_state.image_desc_cache, 
-                             st.session_state.full_text_cache,
-                             student_comment,
-                             student_name,
-                             st.session_state.uploaded_file_bytes
-                        )
-                        if success:
-                            st.session_state.is_reporting = False
-                            st.toast("已收到您的回覆，我們正在請 Jutor 本人下凡處理，請先繼續寫別題吧！", icon="📨")
-                            st.balloons()
-                            time.sleep(2)
-                            st.rerun()
-                        else:
-                            st.error("發送失敗")
-
-    elif st.session_state.step_index < total_steps - 1:
-        if not st.session_state.in_qa_mode:
-            st.markdown("---")
-            col_back, col_ask, col_next = st.columns([1, 1, 2])
-            
-            with col_back:
-                def prev_step():
-                    if st.session_state.step_index > 0:
-                        st.session_state.step_index -= 1
-                st.button("⬅️ 上一步", on_click=prev_step, disabled=(st.session_state.step_index == 0), use_container_width=True)
-
-            with col_ask:
-                def enter_qa_mode():
-                    st.session_state.in_qa_mode = True
-                    context_prompt = f"講解步驟：{current_step_text}。"
-                    if st.session_state.solve_mode == "math": context_prompt += "目前是純算式模式，學生不懂。"
-                    st.session_state.qa_history = [{"role": "user", "parts": [context_prompt]}, {"role": "model", "parts": ["請提問。"]}]
-                st.button("🤔 我想問...", on_click=enter_qa_mode, use_container_width=True)
-
-            with col_next:
-                btn_label = "✅ 我懂了，下一步！"
-                if st.session_state.step_index == total_steps - 2: 
-                    btn_label = "👀 核對類題答案"
-                
-                def next_step():
-                    st.session_state.step_index += 1
-                st.button(btn_label, on_click=next_step, use_container_width=True, type="primary")
-
-        else:
-            with st.container(border=True):
-                st.markdown("#### 💡 提問時間")
-                for msg in st.session_state.qa_history[2:]:
-                      if msg["role"] == "user": 
-                          icon = "👤"
-                      else: 
-                          icon = assistant_avatar
-                      
-                      with st.chat_message(msg["role"], avatar=icon):
-                          st.markdown(msg["parts"][0])
-                          
-                user_question = st.chat_input("請輸入問題...")
-                if user_question:
-                    with st.chat_message("user", avatar="👤"): st.markdown(user_question)
-                    st.session_state.qa_history.append({"role": "user", "parts": [user_question]})
-                    
-                    with st.chat_message("assistant", avatar=assistant_avatar):
-                        with st.spinner("思考中..."):
-                            try:
-                                full_prompt = "對話紀錄:\n" + "\n".join([f"{h['role']}:{h['parts'][0]}" for h in st.session_state.qa_history]) + f"\n新問題:{user_question}"
-                                response, _ = call_gemini_with_rotation(full_prompt, use_pro=st.session_state.use_pro_model)
-                                st.markdown(response.text)
-                                st.session_state.qa_history.append({"role": "model", "parts": [response.text]})
-                            except: st.error("忙碌中")
-                    st.rerun()
-                def exit_qa_mode():
-                    st.session_state.in_qa_mode = False
-                    st.session_state.qa_history = []
-                st.button("👌 回到主流程", on_click=exit_qa_mode, use_container_width=True)
-
-    else:
-        st.markdown("---")
-        st.success("🎉 恭喜完成！")
-        
-        col_end_back, col_end_reset = st.columns([1, 2])
-        with col_end_back:
-            def prev_step_end():
-                st.session_state.step_index -= 1
-            st.button("⬅️ 上一步", on_click=prev_step_end, use_container_width=True)
-        with col_end_reset:
-            if st.button("🔄 重新問別題", use_container_width=True):
-                st.session_state.is_solving = False
-                st.session_state.solution_steps = []
-                st.session_state.step_index = 0
-                st.session_state.in_qa_mode = False
-                st.session_state.data_saved = False
-                st.session_state.plot_code = None
-                st.session_state.use_pro_model = False
-                st.session_state.is_reporting = False
-                st.session_state.uploaded_file_bytes = None
-                st.rerun()
-
-    if not st.session_state.is_reporting:
-        answer_step_index = -1
-        for idx, step_content in enumerate(st.session_state.solution_steps):
-            if "本題答案" in step_content:
-                answer_step_index = idx
-                break
-        
-        should_show_report = False
-        if answer_step_index != -1:
-            if st.session_state.step_index >= answer_step_index:
-                should_show_report = True
-        elif st.session_state.step_index == total_steps - 1:
-            should_show_report = True
-
-        if should_show_report:
-            st.markdown("")
-            st.markdown("")
-            with st.container(border=True):
-                st.markdown("#### 🚨 覺得答案怪怪的？")
-                if st.button("回報錯誤給 Jutor", use_container_width=True, type="secondary"):
-                    st.session_state.is_reporting = True
-                    st.rerun()
+                        1. **數學式強制 LaTeX**：所有算式、方程式(如 x^2+1=0)、變數(x, y)、數字運算，**務必**使用 `$ ... $` 包裹 (例如 `$x^2+x-1=0$
