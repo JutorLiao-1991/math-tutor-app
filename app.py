@@ -100,6 +100,7 @@ def save_to_google_sheets(grade, mode, image_desc, full_response, key_info=""):
         st.cache_resource.clear()
         return False
 
+# --- Telegram 回報函式 ---
 def send_telegram_alert(grade, question_desc, ai_response, student_comment, student_name, image_bytes=None):
     try:
         if "telegram" in st.secrets:
@@ -190,7 +191,51 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- API 呼叫函式 ---
+# --- 強力排版修復 v9.0 (整合程式碼消音、紅字修復、向量修復) ---
+def clean_output_format(text):
+    if not text: return text
+    text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
+    
+    # 1. 移除 Markdown Code Block (避免 ```latex ... ```)
+    text = re.sub(r'```[a-zA-Z]*\n([\s\S]*?)\n```', r'\1', text)
+
+    # 2. 【核心策略：反引號殺手】將綠色代碼 `...` 強制轉為數學 $...$
+    text = re.sub(r'(?<!`)`([^`\n]+)`(?!`)', r'$\1$', text)
+
+    # 3. Block Math 轉 Inline
+    def block_to_inline(match):
+        content = match.group(1)
+        if len(content) < 50 and '\\\\' not in content and 'align' not in content:
+            return f"${content.strip()}$"
+        return match.group(0)
+    text = re.sub(r'\$\$([\s\S]*?)\$\$', block_to_inline, text)
+    
+    # 4. 裸奔矩陣/環境修復 (強制加 $$)
+    text = re.sub(r'(?<!\$)(\\begin\{[a-z]+\}[\s\S]*?\\end\{[a-z]+\})(?!\$)', r'$$\1$$', text)
+
+    # 5. 裸奔常用數學關鍵字修復 (強制加 $)
+    text = re.sub(r'(?<!\$)(\\(?:vec|frac|sin|cos|tan|cot|lim|sum|int)\{?[^}]*}?)(?!\$)', r'$\1$', text)
+
+    # 6. 【程式碼洩漏消音】
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        # 過濾掉明顯的 Python 繪圖代碼
+        if "plt." in line or "np." in line or "matplotlib" in line:
+            continue 
+        cleaned_lines.append(line)
+    text = "\n".join(cleaned_lines)
+
+    # 7. 基本標點修復
+    text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
+    text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
+    cjk = r'[\u4e00-\u9fa5]'
+    short_content = r'(?:(?!\n|•|- |\* ).){1,30}' 
+    for _ in range(2):
+        pattern = f'(?<={cjk})\s*\\n+\s*({short_content})\s*\\n+\s*(?={cjk}|[，。！？：,.?])'
+        text = re.sub(pattern, r' \1 ', text)
+    return text
+
 def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
     try:
         keys = st.secrets["API_KEYS"]
@@ -222,72 +267,6 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
                 raise e
     raise last_error
 
-# --- v9.0 新增：AI 自動修復功能 ---
-def fix_broken_latex_with_ai(broken_text):
-    """
-    當偵測到文字裡有被 backticks 包住的數學符號時，
-    呼叫 Gemini Flash 進行專門的修復。
-    """
-    repair_prompt = f"""
-    【任務】修復以下文字的數學排版錯誤。
-    
-    【問題】原文中將數學公式錯誤地使用了 Markdown Code Block (反引號 `...` 或 ```...```) 包裹，導致顯示為紅色/綠色字體。
-    
-    【指令】
-    1. 請將所有的 `...` 或 ```...``` 中的數學內容，改為使用 LaTeX 格式 `$ ... $` (行內) 或 `$$...$$` (區塊)。
-    2. 確保 \frac, \sqrt, \vec 等 LaTeX 語法正確渲染。
-    3. 不要改變原文的中文敘述，只修復格式。
-    4. 直接輸出修復後的全文，不要加任何解釋。
-
-    【待修復文本】：
-    {broken_text}
-    """
-    try:
-        # 強制使用 Flash 模型以求速度
-        response, _ = call_gemini_with_rotation(repair_prompt, use_pro=False) 
-        return response.text.strip()
-    except:
-        return broken_text # 若修復失敗，回傳原標題
-
-def clean_output_format(text):
-    if not text: return text
-    text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
-    
-    # 1. 基礎 Regex 清洗 (先做簡單的)
-    text = re.sub(r'```[a-zA-Z]*\n([\s\S]*?)\n```', r'\1', text)
-    
-    # 2. 【核心】偵測是否需要 AI 修復
-    # 如果內容還有反引號 `，且反引號內包含數學特徵 (\, =, ^, _, {)
-    # 代表 Regex 可能修不好，直接呼叫 AI 修復
-    if re.search(r'`.*?[\\=\^_{].*?`', text): 
-        # 觸發 AI 修復 (這裡會多花一點時間，但能確保完美)
-        text = fix_broken_latex_with_ai(text)
-    else:
-        # 如果沒偵測到嚴重錯誤，就用原本的 Regex 簡單處理就好
-        text = re.sub(r'(?<!`)`([^`\n]+)`(?!`)', r'$\1$', text)
-        text = re.sub(r'\$\$([\s\S]*?)\$\$', lambda m: f"${m.group(1).strip()}$", text)
-        text = re.sub(r'(?<!\$)\\vec\{[^}]+\}(?!\$)', r'$\g<0>$', text)
-        text = re.sub(r'(?<!\$)\\frac\{[^}]+\}\{[^}]+\}(?!\$)', r'$\g<0>$', text)
-
-    # 3. 程式碼洩漏消音
-    lines = text.split('\n')
-    cleaned_lines = []
-    for line in lines:
-        if "plt." in line or "np." in line or "matplotlib" in line:
-            continue 
-        cleaned_lines.append(line)
-    text = "\n".join(cleaned_lines)
-
-    # 4. 標點修復
-    text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
-    text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
-    cjk = r'[\u4e00-\u9fa5]'
-    short_content = r'(?:(?!\n|•|- |\* ).){1,30}' 
-    for _ in range(2):
-        pattern = f'(?<={cjk})\s*\\n+\s*({short_content})\s*\\n+\s*(?={cjk}|[，。！？：,.?])'
-        text = re.sub(pattern, r' \1 ', text)
-    return text
-
 col1, col2 = st.columns([1, 4]) 
 with col1:
     if os.path.exists(main_logo_path):
@@ -297,7 +276,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v9.0 (AI 自動修復版 12/26)")
+    st.caption("Jutor AI 教學系統 v9.0 (終極修復版 12/28)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -354,10 +333,10 @@ if not st.session_state.is_solving:
                         formatting = """
                         【排版嚴格指令】
                         1. **數學式強制 LaTeX**：所有算式、方程式、變數、數字，**務必**使用 `$ ... $` 包裹 (例如 `$x^2$`)。
-                        2. **嚴禁使用 Markdown Code**：絕對禁止使用反引號 `...` 或代碼塊 ``` ... ``` 來顯示數學式。看到反引號我會生氣。
-                        3. **列表控制**：除非是列舉不同選項，否則不要使用 Bullet Points 來顯示單一數值。
+                        2. **嚴禁使用 Markdown Code**：絕對禁止使用反引號 `...` 或代碼塊 ``` ... ``` 來顯示數學式。
+                        3. **文字流暢**：請輸出完整的段落。不要在每個單詞或短語後換行，這會導致排版破碎。
                         4. **直式計算**：只有在長算式推導時，才使用換行對齊。
-                        5. **禁止洩漏程式碼**：絕對禁止在文字解說中印出 Python 程式碼 (如 `plt.plot`, `np.array` 等)。若要繪圖，程式碼只能出現在 `===PLOT===` 區塊內。
+                        5. **禁止洩漏程式碼**：絕對禁止在文字解說中印出 Python 程式碼 (如 `plt.plot` 等)。若要繪圖，程式碼只能出現在 `===PLOT===` 區塊內。
                         """
                         plotting = """
                         【繪圖能力啟動】
