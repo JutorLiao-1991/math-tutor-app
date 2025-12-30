@@ -160,6 +160,7 @@ if 'data_saved' not in st.session_state: st.session_state.data_saved = False
 if 'plot_code' not in st.session_state: st.session_state.plot_code = None
 if 'use_pro_model' not in st.session_state: st.session_state.use_pro_model = False
 if 'trigger_rescue' not in st.session_state: st.session_state.trigger_rescue = False
+if 'trigger_retry' not in st.session_state: st.session_state.trigger_retry = False # 新增：重試開關
 if 'used_key_suffix' not in st.session_state: st.session_state.used_key_suffix = "" 
 if 'image_desc_cache' not in st.session_state: st.session_state.image_desc_cache = "" 
 if 'full_text_cache' not in st.session_state: st.session_state.full_text_cache = ""   
@@ -191,42 +192,33 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 強力排版修復 v9.0 (整合程式碼消音、紅字修復、向量修復) ---
+# --- 輕量化排版修復 (Regex 暴力清洗) ---
 def clean_output_format(text):
     if not text: return text
     text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
     
-    # 1. 移除 Markdown Code Block (避免 ```latex ... ```)
-    text = re.sub(r'```[a-zA-Z]*\n([\s\S]*?)\n```', r'\1', text)
+    # 1. 移除 Markdown Code Block Fences (只刪除 ``` )
+    # 這樣即便 AI 用了 ```，裡面的數學也不會被當成代碼塊
+    text = text.replace("```latex", "").replace("```python", "").replace("```", "")
 
-    # 2. 【核心策略：反引號殺手】將綠色代碼 `...` 強制轉為數學 $...$
-    text = re.sub(r'(?<!`)`([^`\n]+)`(?!`)', r'$\1$', text)
+    # 2. 反引號殺手：把所有 `...` 換成 $...$
+    # 這是解決綠色/紅色亂碼最快的方法
+    text = re.sub(r'`([^`\n]+)`', r'$\1$', text)
 
-    # 3. Block Math 轉 Inline
-    def block_to_inline(match):
-        content = match.group(1)
-        if len(content) < 50 and '\\\\' not in content and 'align' not in content:
-            return f"${content.strip()}$"
-        return match.group(0)
-    text = re.sub(r'\$\$([\s\S]*?)\$\$', block_to_inline, text)
-    
-    # 4. 裸奔矩陣/環境修復 (強制加 $$)
+    # 3. 裸奔矩陣與常用符號修復 (強制加 $)
     text = re.sub(r'(?<!\$)(\\begin\{[a-z]+\}[\s\S]*?\\end\{[a-z]+\})(?!\$)', r'$$\1$$', text)
-
-    # 5. 裸奔常用數學關鍵字修復 (強制加 $)
     text = re.sub(r'(?<!\$)(\\(?:vec|frac|sin|cos|tan|cot|lim|sum|int)\{?[^}]*}?)(?!\$)', r'$\1$', text)
 
-    # 6. 【程式碼洩漏消音】
+    # 4. 程式碼洩漏消音
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
-        # 過濾掉明顯的 Python 繪圖代碼
         if "plt." in line or "np." in line or "matplotlib" in line:
             continue 
         cleaned_lines.append(line)
     text = "\n".join(cleaned_lines)
 
-    # 7. 基本標點修復
+    # 5. 基本標點修復
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
     cjk = r'[\u4e00-\u9fa5]'
@@ -276,7 +268,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v9.0 (終極修復版 12/28)")
+    st.caption("Jutor AI 教學系統 v9.1 (極速重刷版 12/28)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -303,11 +295,19 @@ if not st.session_state.is_solving:
         with col_btn_math:
             start_math = st.button("🔢 純算式解法", use_container_width=True)
 
-        if start_verbal or start_math or st.session_state.trigger_rescue:
+        # 觸發條件：按按鈕 OR 觸發重試 (Trigger Retry)
+        if start_verbal or start_math or st.session_state.trigger_rescue or st.session_state.trigger_retry:
             if not question_target:
                 st.warning("⚠️ 請先輸入你想問哪一題！")
+                st.session_state.trigger_retry = False # Reset
             else:
-                if st.session_state.trigger_rescue:
+                # 處理重試邏輯
+                if st.session_state.trigger_retry:
+                    # 重試時沿用上一次的模式
+                    mode = st.session_state.solve_mode
+                    use_pro = st.session_state.use_pro_model
+                    st.session_state.trigger_retry = False # Reset flag
+                elif st.session_state.trigger_rescue:
                     mode = st.session_state.solve_mode
                     use_pro = True 
                     st.session_state.use_pro_model = True
@@ -330,13 +330,15 @@ if not st.session_state.is_solving:
 
                         guardrail = "【過濾機制】請辨識圖片內容。若明顯為「自拍照、風景照、寵物照」等與學習無關的圖片，請回傳 REFUSE_OFF_TOPIC。若是數學題目、文字截圖、圖表分析，即使模糊或非典型格式，也請回答。"
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
+                        
+                        # --- v9.1 Prompt 優化：更精簡，強調 LaTeX ---
                         formatting = """
-                        【排版嚴格指令】
-                        1. **數學式強制 LaTeX**：所有算式、方程式、變數、數字，**務必**使用 `$ ... $` 包裹 (例如 `$x^2$`)。
-                        2. **嚴禁使用 Markdown Code**：絕對禁止使用反引號 `...` 或代碼塊 ``` ... ``` 來顯示數學式。
-                        3. **文字流暢**：請輸出完整的段落。不要在每個單詞或短語後換行，這會導致排版破碎。
-                        4. **直式計算**：只有在長算式推導時，才使用換行對齊。
-                        5. **禁止洩漏程式碼**：絕對禁止在文字解說中印出 Python 程式碼 (如 `plt.plot` 等)。若要繪圖，程式碼只能出現在 `===PLOT===` 區塊內。
+                        【排版絕對指令】
+                        1. **MATH ONLY LATEX**: 所有的數學符號、算式、變數(如 x, y, a=1)，必須且只能使用 LaTeX 格式 (例如 `$x^2$`, `$3+2=5$`)。
+                        2. **NO MARKDOWN CODE**: 嚴禁使用 Markdown 代碼塊 (``` 或 ` ) 來包裹數學式。這會導致顯示錯誤。
+                        3. **完整段落**: 請輸出完整的中文段落，不要在每個詞彙後換行。
+                        4. **直式對齊**: 只有在長算式推導時，才使用換行對齊。
+                        5. **無程式碼**: 不要在文字解釋中顯示 Python 代碼 (如 plt.plot)。
                         """
                         plotting = """
                         【繪圖能力啟動】
@@ -599,11 +601,19 @@ if st.session_state.is_solving and st.session_state.solution_steps:
         elif st.session_state.step_index == total_steps - 1:
             should_show_report = True
 
+        # --- v9.1 新增：亂碼重試按鈕 ---
         if should_show_report:
             st.markdown("")
             st.markdown("")
-            with st.container(border=True):
-                st.markdown("#### 🚨 覺得答案怪怪的？")
-                if st.button("回報錯誤給 Jutor", use_container_width=True, type="secondary"):
+            
+            c_retry, c_report = st.columns(2)
+            with c_retry:
+                # 重新生成按鈕
+                if st.button("🔄 出現亂碼？點我重新生成", use_container_width=True):
+                    st.session_state.trigger_retry = True # 設定 flag
+                    st.rerun() # 重新執行，觸發上方的生成邏輯
+            
+            with c_report:
+                if st.button("🚨 答案有錯，回報給鳩特", use_container_width=True, type="secondary"):
                     st.session_state.is_reporting = True
                     st.rerun()
