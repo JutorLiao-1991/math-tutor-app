@@ -160,7 +160,7 @@ if 'data_saved' not in st.session_state: st.session_state.data_saved = False
 if 'plot_code' not in st.session_state: st.session_state.plot_code = None
 if 'use_pro_model' not in st.session_state: st.session_state.use_pro_model = False
 if 'trigger_rescue' not in st.session_state: st.session_state.trigger_rescue = False
-if 'trigger_retry' not in st.session_state: st.session_state.trigger_retry = False # 新增：重試開關
+if 'trigger_retry' not in st.session_state: st.session_state.trigger_retry = False 
 if 'used_key_suffix' not in st.session_state: st.session_state.used_key_suffix = "" 
 if 'image_desc_cache' not in st.session_state: st.session_state.image_desc_cache = "" 
 if 'full_text_cache' not in st.session_state: st.session_state.full_text_cache = ""   
@@ -197,19 +197,11 @@ def clean_output_format(text):
     if not text: return text
     text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
     
-    # 1. 移除 Markdown Code Block Fences (只刪除 ``` )
-    # 這樣即便 AI 用了 ```，裡面的數學也不會被當成代碼塊
     text = text.replace("```latex", "").replace("```python", "").replace("```", "")
-
-    # 2. 反引號殺手：把所有 `...` 換成 $...$
-    # 這是解決綠色/紅色亂碼最快的方法
     text = re.sub(r'`([^`\n]+)`', r'$\1$', text)
-
-    # 3. 裸奔矩陣與常用符號修復 (強制加 $)
     text = re.sub(r'(?<!\$)(\\begin\{[a-z]+\}[\s\S]*?\\end\{[a-z]+\})(?!\$)', r'$$\1$$', text)
     text = re.sub(r'(?<!\$)(\\(?:vec|frac|sin|cos|tan|cot|lim|sum|int)\{?[^}]*}?)(?!\$)', r'$\1$', text)
 
-    # 4. 程式碼洩漏消音
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
@@ -218,7 +210,6 @@ def clean_output_format(text):
         cleaned_lines.append(line)
     text = "\n".join(cleaned_lines)
 
-    # 5. 基本標點修復
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
     cjk = r'[\u4e00-\u9fa5]'
@@ -268,7 +259,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v9.1 (極速重刷版 12/28)")
+    st.caption("Jutor AI 教學系統 v9.2 (毒舌模式版 12/28)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -289,31 +280,42 @@ if not st.session_state.is_solving:
         question_target = st.text_input("你想問圖片中的哪一題？", placeholder="例如：第 5 題...")
         
         st.markdown("### 🚀 選擇解題模式：")
-        col_btn_verbal, col_btn_math = st.columns(2)
+        
+        # --- v9.2 新增：三欄位按鈕 (新增毒舌模式) ---
+        col_btn_verbal, col_btn_math, col_btn_toxic = st.columns([1, 1, 1])
+        
         with col_btn_verbal:
-            start_verbal = st.button("🗣️ Jutor 口語教學", use_container_width=True, type="primary")
+            start_verbal = st.button("🗣️ 口語教學", use_container_width=True, type="primary")
         with col_btn_math:
-            start_math = st.button("🔢 純算式解法", use_container_width=True)
+            start_math = st.button("🔢 純算式", use_container_width=True)
+        with col_btn_toxic:
+            start_toxic = st.button("☠️ 毒舌模式", use_container_width=True)
 
-        # 觸發條件：按按鈕 OR 觸發重試 (Trigger Retry)
-        if start_verbal or start_math or st.session_state.trigger_rescue or st.session_state.trigger_retry:
+        # 觸發條件
+        if start_verbal or start_math or start_toxic or st.session_state.trigger_rescue or st.session_state.trigger_retry:
             if not question_target:
                 st.warning("⚠️ 請先輸入你想問哪一題！")
-                st.session_state.trigger_retry = False # Reset
+                st.session_state.trigger_retry = False 
             else:
                 # 處理重試邏輯
                 if st.session_state.trigger_retry:
-                    # 重試時沿用上一次的模式
                     mode = st.session_state.solve_mode
                     use_pro = st.session_state.use_pro_model
-                    st.session_state.trigger_retry = False # Reset flag
+                    st.session_state.trigger_retry = False 
                 elif st.session_state.trigger_rescue:
                     mode = st.session_state.solve_mode
                     use_pro = True 
                     st.session_state.use_pro_model = True
                     st.session_state.trigger_rescue = False 
                 else:
-                    mode = "verbal" if start_verbal else "math"
+                    # 判斷模式
+                    if start_toxic:
+                        mode = "toxic"
+                    elif start_math:
+                        mode = "math"
+                    else:
+                        mode = "verbal"
+                    
                     st.session_state.solve_mode = mode
                     use_pro = False 
                     st.session_state.use_pro_model = False
@@ -321,7 +323,10 @@ if not st.session_state.is_solving:
                 if use_pro:
                     loading_text = "Jutor Pro (2.5) 正在深度分析並修復錯誤..."
                 else:
-                    loading_text = "Jutor AI (2.5) 正在思考怎麼教會你這題..."
+                    if mode == "toxic":
+                        loading_text = "Jutor AI (2.5) 正在深呼吸準備開罵..."
+                    else:
+                        loading_text = "Jutor AI (2.5) 正在思考怎麼教會你這題..."
                 
                 with st.spinner(loading_text):
                     try:
@@ -330,15 +335,13 @@ if not st.session_state.is_solving:
 
                         guardrail = "【過濾機制】請辨識圖片內容。若明顯為「自拍照、風景照、寵物照」等與學習無關的圖片，請回傳 REFUSE_OFF_TOPIC。若是數學題目、文字截圖、圖表分析，即使模糊或非典型格式，也請回答。"
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
-                        
-                        # --- v9.1 Prompt 優化：更精簡，強調 LaTeX ---
                         formatting = """
                         【排版絕對指令】
                         1. **MATH ONLY LATEX**: 所有的數學符號、算式、變數(如 x, y, a=1)，必須且只能使用 LaTeX 格式 (例如 `$x^2$`, `$3+2=5$`)。
-                        2. **NO MARKDOWN CODE**: 嚴禁使用 Markdown 代碼塊 (``` 或 ` ) 來包裹數學式。這會導致顯示錯誤。
+                        2. **NO MARKDOWN CODE**: 嚴禁使用 Markdown 代碼塊 (``` 或 ` ) 來包裹數學式。
                         3. **完整段落**: 請輸出完整的中文段落，不要在每個詞彙後換行。
-                        4. **直式對齊**: 只有在長算式推導時，才使用換行對齊。
-                        5. **無程式碼**: 不要在文字解釋中顯示 Python 代碼 (如 plt.plot)。
+                        4. **直式計算**: 只有在長算式推導時，才使用換行對齊。
+                        5. **無程式碼**: 不要在文字解釋中顯示 Python 代碼。
                         """
                         plotting = """
                         【繪圖能力啟動】
@@ -353,10 +356,21 @@ if not st.session_state.is_solving:
                         if selected_grade in ["小五", "小六"]:
                             common_role += "【重要】學生為台灣國小生，請嚴格遵守台灣國小數學課綱：1. 避免使用二元一次聯立方程式或過於抽象的代數符號(x,y)。2. 多使用「線段圖」、「基準量比較量」或具體數字推演來解釋。3. 語言要更白話、具體。"
 
+                        # --- v9.2 新增：風格設定 (含毒舌模式) ---
                         if mode == "verbal":
                             style = "風格：幽默口語、譬喻教學、步驟化。"
-                        else:
+                        elif mode == "math":
                             style = "風格：純算式、LaTeX、極簡。"
+                        elif mode == "toxic":
+                            style = """
+                            風格：【地獄毒舌教練模式】
+                            1. 態度：極度諷刺、嘴賤但心軟、恨鐵不成鋼。
+                            2. 語氣：請模仿台灣補習班嚴厲老師的口氣，使用「同學，你腦袋是裝飾品嗎？」、「這種題目也能錯？」、「你是通靈寫出來的嗎？」等語句。
+                            3. 任務：先狠狠吐槽學生怎麼連這都不會，展現出「智商被侮辱」的崩潰感，然後再「無奈地」給出正確詳解。
+                            4. 重要：雖然毒舌，但必須確實把題目教懂，不能只罵不教。
+                            """
+                        else:
+                            style = "風格：幽默口語。" # Fallback
 
                         prompt = f"""
                         {guardrail}
@@ -446,8 +460,16 @@ if not st.session_state.is_solving:
 
 if st.session_state.is_solving and st.session_state.solution_steps:
     
-    header_text = "🗣️ Jutor 口語教學中" if st.session_state.solve_mode == "verbal" else "🔢 純算式推導中"
-    
+    # --- 標題依模式調整 ---
+    if st.session_state.solve_mode == "verbal":
+        header_text = "🗣️ Jutor 口語教學中"
+    elif st.session_state.solve_mode == "math":
+        header_text = "🔢 純算式推導中"
+    elif st.session_state.solve_mode == "toxic":
+        header_text = "☠️ Jutor 毒舌開罵中"
+    else:
+        header_text = "Jutor 解題中"
+
     if st.session_state.use_pro_model:
         st.markdown(f"### {header_text} (🔥 2.5 Pro 救援)")
     else:
@@ -601,17 +623,15 @@ if st.session_state.is_solving and st.session_state.solution_steps:
         elif st.session_state.step_index == total_steps - 1:
             should_show_report = True
 
-        # --- v9.1 新增：亂碼重試按鈕 ---
         if should_show_report:
             st.markdown("")
             st.markdown("")
             
             c_retry, c_report = st.columns(2)
             with c_retry:
-                # 重新生成按鈕
                 if st.button("🔄 出現亂碼？點我重新生成", use_container_width=True):
-                    st.session_state.trigger_retry = True # 設定 flag
-                    st.rerun() # 重新執行，觸發上方的生成邏輯
+                    st.session_state.trigger_retry = True 
+                    st.rerun() 
             
             with c_report:
                 if st.button("🚨 答案有錯，回報給鳩特", use_container_width=True, type="secondary"):
