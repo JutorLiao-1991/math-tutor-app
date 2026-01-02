@@ -192,31 +192,60 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 輕量化排版修復 (Regex 暴力清洗) ---
+# --- v9.4 數學符號強力修復版 ---
 def clean_output_format(text):
     if not text: return text
     text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
     
+    # 1. 刪除 Markdown 代碼塊標記
     text = text.replace("```latex", "").replace("```python", "").replace("```", "")
-    text = re.sub(r'`([^`\n]+)`', r'$\1$', text)
-    text = re.sub(r'(?<!\$)(\\begin\{[a-z]+\}[\s\S]*?\\end\{[a-z]+\})(?!\$)', r'$$\1$$', text)
-    text = re.sub(r'(?<!\$)(\\(?:vec|frac|sin|cos|tan|cot|lim|sum|int)\{?[^}]*}?)(?!\$)', r'$\1$', text)
 
+    # 2. 反引號殺手：把所有 `...` 換成 $...$
+    text = re.sub(r'`([^`\n]+)`', r'$\1$', text)
+
+    # 3. 【核心更新】數學符號強制穿衣 (Dollar Sign Enforcer)
+    # 針對 \vec{...}, \frac{...}, \sqrt{...} 等常見符號，若沒被 $ 包圍，強制加上
+    # 這是解決 \vec{a} 顯示為文字的關鍵
+    
+    # 針對 \vec{a} 或 \vec{AB}
+    text = re.sub(r'(?<!\$)\\vec\{([a-zA-Z0-9]+)\}(?!\$)', r'$\\vec{\1}$', text)
+    
+    # 針對 \frac{a}{b}
+    text = re.sub(r'(?<!\$)\\frac\{[^}]+\}\{[^}]+\}(?!\$)', r'$\g<0>$', text)
+    
+    # 針對 \sqrt{a}
+    text = re.sub(r'(?<!\$)\\sqrt\{[^}]+\}(?!\$)', r'$\g<0>$', text)
+    
+    # 針對矩陣 \begin{...} ... \end{...}
+    text = re.sub(r'(?<!\$)(\\begin\{[a-z]+\}[\s\S]*?\\end\{[a-z]+\})(?!\$)', r'$$\1$$', text)
+    
+    # 針對希臘字母與運算符號 (如 \theta, \pi, \cdot)
+    text = re.sub(r'(?<!\$)\\(theta|alpha|beta|gamma|pi|cdot|times|le|ge|neq)(?!\$)', r'$\\\1$', text)
+
+    # 4. 程式碼洩漏消音
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
-        if "plt." in line or "np." in line or "matplotlib" in line:
-            continue 
+        l = line.strip()
+        if (re.match(r'^[a-zA-Z0-9_]+(\s*,\s*[a-zA-Z0-9_]+)*\s*=\s*[-0-9./]+', l) and 'plt' in text) or \
+           l.startswith('plt.') or \
+           l.startswith('np.') or \
+           'matplotlib' in l:
+            continue
         cleaned_lines.append(line)
     text = "\n".join(cleaned_lines)
 
+    # 5. 基本標點修復與垂直文字膠水
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
+    
+    # 移除短語後的強制換行 (修復垂直文字)
     cjk = r'[\u4e00-\u9fa5]'
     short_content = r'(?:(?!\n|•|- |\* ).){1,30}' 
     for _ in range(2):
         pattern = f'(?<={cjk})\s*\\n+\s*({short_content})\s*\\n+\s*(?={cjk}|[，。！？：,.?])'
         text = re.sub(pattern, r' \1 ', text)
+        
     return text
 
 def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
@@ -259,7 +288,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v9.2 (毒舌模式版 12/28)")
+    st.caption("Jutor AI 教學系統 v9.4 (向量符號修復版 12/29)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -281,7 +310,6 @@ if not st.session_state.is_solving:
         
         st.markdown("### 🚀 選擇解題模式：")
         
-        # --- v9.2 新增：三欄位按鈕 (新增毒舌模式) ---
         col_btn_verbal, col_btn_math, col_btn_toxic = st.columns([1, 1, 1])
         
         with col_btn_verbal:
@@ -291,13 +319,11 @@ if not st.session_state.is_solving:
         with col_btn_toxic:
             start_toxic = st.button("☠️ 毒舌模式", use_container_width=True)
 
-        # 觸發條件
         if start_verbal or start_math or start_toxic or st.session_state.trigger_rescue or st.session_state.trigger_retry:
             if not question_target:
                 st.warning("⚠️ 請先輸入你想問哪一題！")
                 st.session_state.trigger_retry = False 
             else:
-                # 處理重試邏輯
                 if st.session_state.trigger_retry:
                     mode = st.session_state.solve_mode
                     use_pro = st.session_state.use_pro_model
@@ -308,13 +334,9 @@ if not st.session_state.is_solving:
                     st.session_state.use_pro_model = True
                     st.session_state.trigger_rescue = False 
                 else:
-                    # 判斷模式
-                    if start_toxic:
-                        mode = "toxic"
-                    elif start_math:
-                        mode = "math"
-                    else:
-                        mode = "verbal"
+                    if start_toxic: mode = "toxic"
+                    elif start_math: mode = "math"
+                    else: mode = "verbal"
                     
                     st.session_state.solve_mode = mode
                     use_pro = False 
@@ -337,11 +359,10 @@ if not st.session_state.is_solving:
                         transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
                         formatting = """
                         【排版絕對指令】
-                        1. **MATH ONLY LATEX**: 所有的數學符號、算式、變數(如 x, y, a=1)，必須且只能使用 LaTeX 格式 (例如 `$x^2$`, `$3+2=5$`)。
-                        2. **NO MARKDOWN CODE**: 嚴禁使用 Markdown 代碼塊 (``` 或 ` ) 來包裹數學式。
-                        3. **完整段落**: 請輸出完整的中文段落，不要在每個詞彙後換行。
-                        4. **直式計算**: 只有在長算式推導時，才使用換行對齊。
-                        5. **無程式碼**: 不要在文字解釋中顯示 Python 代碼。
+                        1. **MATH ONLY LATEX**: 所有的數學符號、算式，必須使用 LaTeX 格式 (例如 `$x^2$`)。
+                        2. **NO MARKDOWN CODE**: 嚴禁使用 Markdown 代碼塊 (``` 或 ` ) 來包裹數學式。這會導致顯示為紅色代碼。
+                        3. **文字流暢**: 請輸出完整的段落。嚴禁在每個單詞或短語後換行，請保持語句連貫。
+                        4. **無程式碼**: 絕對不要在文字解釋中顯示 Python 運算過程或繪圖代碼。
                         """
                         plotting = """
                         【繪圖能力啟動】
@@ -356,7 +377,6 @@ if not st.session_state.is_solving:
                         if selected_grade in ["小五", "小六"]:
                             common_role += "【重要】學生為台灣國小生，請嚴格遵守台灣國小數學課綱：1. 避免使用二元一次聯立方程式或過於抽象的代數符號(x,y)。2. 多使用「線段圖」、「基準量比較量」或具體數字推演來解釋。3. 語言要更白話、具體。"
 
-                        # --- v9.2 新增：風格設定 (含毒舌模式) ---
                         if mode == "verbal":
                             style = "風格：幽默口語、譬喻教學、步驟化。"
                         elif mode == "math":
@@ -364,13 +384,12 @@ if not st.session_state.is_solving:
                         elif mode == "toxic":
                             style = """
                             風格：【地獄毒舌教練模式】
-                            1. 態度：極度諷刺、嘴賤但心軟、恨鐵不成鋼。
-                            2. 語氣：請模仿台灣補習班嚴厲老師的口氣，使用「同學，你腦袋是裝飾品嗎？」、「這種題目也能錯？」、「你是通靈寫出來的嗎？」等語句。
-                            3. 任務：先狠狠吐槽學生怎麼連這都不會，展現出「智商被侮辱」的崩潰感，然後再「無奈地」給出正確詳解。
-                            4. 重要：雖然毒舌，但必須確實把題目教懂，不能只罵不教。
+                            1. 態度：極度諷刺、嘴賤但心軟。
+                            2. 語氣：請模仿台灣補習班嚴厲老師的口氣。
+                            3. 任務：先狠狠吐槽學生，然後再「無奈地」給出正確詳解。
                             """
                         else:
-                            style = "風格：幽默口語。" # Fallback
+                            style = "風格：幽默口語。" 
 
                         prompt = f"""
                         {guardrail}
@@ -460,7 +479,6 @@ if not st.session_state.is_solving:
 
 if st.session_state.is_solving and st.session_state.solution_steps:
     
-    # --- 標題依模式調整 ---
     if st.session_state.solve_mode == "verbal":
         header_text = "🗣️ Jutor 口語教學中"
     elif st.session_state.solve_mode == "math":
