@@ -192,37 +192,19 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- v9.4 數學符號強力修復版 ---
+# --- 排版修復邏輯 ---
 def clean_output_format(text):
     if not text: return text
     text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
     
-    # 1. 刪除 Markdown 代碼塊標記
-    text = text.replace("```latex", "").replace("```python", "").replace("```", "")
+    # 1. 移除 Markdown Code Blocks
+    text = re.sub(r'```python[\s\S]*?```', '', text) 
+    text = text.replace("```latex", "").replace("```", "")
 
-    # 2. 反引號殺手：把所有 `...` 換成 $...$
+    # 2. 反引號殺手
     text = re.sub(r'`([^`\n]+)`', r'$\1$', text)
 
-    # 3. 【核心更新】數學符號強制穿衣 (Dollar Sign Enforcer)
-    # 針對 \vec{...}, \frac{...}, \sqrt{...} 等常見符號，若沒被 $ 包圍，強制加上
-    # 這是解決 \vec{a} 顯示為文字的關鍵
-    
-    # 針對 \vec{a} 或 \vec{AB}
-    text = re.sub(r'(?<!\$)\\vec\{([a-zA-Z0-9]+)\}(?!\$)', r'$\\vec{\1}$', text)
-    
-    # 針對 \frac{a}{b}
-    text = re.sub(r'(?<!\$)\\frac\{[^}]+\}\{[^}]+\}(?!\$)', r'$\g<0>$', text)
-    
-    # 針對 \sqrt{a}
-    text = re.sub(r'(?<!\$)\\sqrt\{[^}]+\}(?!\$)', r'$\g<0>$', text)
-    
-    # 針對矩陣 \begin{...} ... \end{...}
-    text = re.sub(r'(?<!\$)(\\begin\{[a-z]+\}[\s\S]*?\\end\{[a-z]+\})(?!\$)', r'$$\1$$', text)
-    
-    # 針對希臘字母與運算符號 (如 \theta, \pi, \cdot)
-    text = re.sub(r'(?<!\$)\\(theta|alpha|beta|gamma|pi|cdot|times|le|ge|neq)(?!\$)', r'$\\\1$', text)
-
-    # 4. 程式碼洩漏消音
+    # 3. 程式碼洩漏消音
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
@@ -235,11 +217,18 @@ def clean_output_format(text):
         cleaned_lines.append(line)
     text = "\n".join(cleaned_lines)
 
-    # 5. 基本標點修復與垂直文字膠水
+    # 4. 強制轉 LaTeX 符號
+    text = re.sub(r'(?<!\$)(\\begin\{[a-z]+\}[\s\S]*?\\end\{[a-z]+\})(?!\$)', r'$$\1$$', text)
+    text = re.sub(r'(?<!\$)(\\(?:vec|frac|sin|cos|tan|cot|lim|sum|int)\{?[^}]*}?)(?!\$)', r'$\1$', text)
+
+    # 5. 垂直膠水 (修復斷行)
+    for _ in range(2): 
+        text = re.sub(r'\n\s*([=+\-*/|<>])\s*\n', r' \1 ', text)
+        text = re.sub(r'\n\s*(\\[a-zA-Z]+(?:\{.*?\})?)\s*\n', r' \1 ', text)
+    
+    # 6. 基本修復
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
-    
-    # 移除短語後的強制換行 (修復垂直文字)
     cjk = r'[\u4e00-\u9fa5]'
     short_content = r'(?:(?!\n|•|- |\* ).){1,30}' 
     for _ in range(2):
@@ -288,7 +277,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v9.4 (向量符號修復版 12/29)")
+    st.caption("Jutor AI 教學系統 v9.5 (全域重刷+UI回饋版 12/29)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -627,31 +616,23 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.session_state.uploaded_file_bytes = None
                 st.rerun()
 
+    # --- v9.5 新增：全域底部工具列 (每頁都顯示) ---
     if not st.session_state.is_reporting:
-        answer_step_index = -1
-        for idx, step_content in enumerate(st.session_state.solution_steps):
-            if "本題答案" in step_content:
-                answer_step_index = idx
-                break
+        st.markdown("")
+        st.markdown("")
         
-        should_show_report = False
-        if answer_step_index != -1:
-            if st.session_state.step_index >= answer_step_index:
-                should_show_report = True
-        elif st.session_state.step_index == total_steps - 1:
-            should_show_report = True
-
-        if should_show_report:
-            st.markdown("")
-            st.markdown("")
-            
-            c_retry, c_report = st.columns(2)
-            with c_retry:
-                if st.button("🔄 出現亂碼？點我重新生成", use_container_width=True):
-                    st.session_state.trigger_retry = True 
-                    st.rerun() 
-            
-            with c_report:
-                if st.button("🚨 答案有錯，回報給鳩特", use_container_width=True, type="secondary"):
-                    st.session_state.is_reporting = True
-                    st.rerun()
+        col_util_1, col_util_2 = st.columns(2)
+        
+        with col_util_1:
+            # 亂碼重刷按鈕 (全域顯示)
+            if st.button("🔄 出現亂碼？點我重新生成", use_container_width=True):
+                st.toast("🧹 正在強力修復亂碼中...", icon="🔄")
+                time.sleep(0.8) # 讓學生看得到提示
+                st.session_state.trigger_retry = True 
+                st.rerun() 
+        
+        with col_util_2:
+            # 錯誤回報按鈕
+            if st.button("🚨 答案有錯，回報給鳩特", use_container_width=True, type="secondary"):
+                st.session_state.is_reporting = True
+                st.rerun()
