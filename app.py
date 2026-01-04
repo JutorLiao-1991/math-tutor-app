@@ -193,17 +193,20 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- v9.9 核心修復：向量與分數的暴力美學 ---
+# --- v10.0 智慧內顯修復邏輯 ---
 def clean_output_format(text):
     if not text: return text
     text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
     
-    # 1. 移除程式碼區塊標記
+    # 1. 貨幣保護：將 $100 轉為 \$100，避免誤判為數學開始
+    text = re.sub(r'(?<!\\)\$(\d+)', r'\\$\1', text)
+
+    # 2. 移除 Code Blocks
     text = re.sub(r'```python[\s\S]*?```', '', text) 
     text = text.replace("```latex", "").replace("```", "")
     text = re.sub(r'`([^`\n]+)`', r'$\1$', text) # 反引號殺手
 
-    # 2. 程式碼洩漏消音 (A4_x 修正)
+    # 3. 程式碼洩漏消音
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
@@ -216,26 +219,35 @@ def clean_output_format(text):
         cleaned_lines.append(line)
     text = "\n".join(cleaned_lines)
 
-    # 3. 裸奔矩陣修復
+    # 4. 裸奔矩陣修復
     text = re.sub(r'(?<!\$)(\\begin\{[a-z]+\}[\s\S]*?\\end\{[a-z]+\})(?!\$)', r'$$\1$$', text)
 
-    # 4. 【核心更新】針對 \vec 和 \frac 的強力修復
-    # (a) 修復向量：只要看到 \vec{...} 且外面沒有 $，就強制加上
-    # Regex 解釋：(?<!\$) 確保前面沒 $，\\vec\{([^}]+)\} 抓取花括號內的任何內容(排除嵌套)，(?!\$) 確保後面沒 $
-    text = re.sub(r'(?<!\$)\\vec\{([^}]+)\}(?!\$)', r'$\\vec{\1}$', text)
-    
-    # (b) 修復分數：只要看到 \frac{...}{...} 且外面沒有 $，就強制加上
-    text = re.sub(r'(?<!\$)\\frac\{([^}]+)\}\{([^}]+)\}(?!\$)', r'$\\frac{\1}{\2}$', text)
+    # 5. 【核心更新：智慧穿衣 + 內衣移除】
+    # 定義一個 callback 函數，專門處理 \vec{...} 內部的 $
+    def smart_wrap_vec(match):
+        content = match.group(1) # 抓到花括號裡的內容
+        content = content.replace('$', '') # 脫掉裡面的內衣 (移除 $)
+        return f"$\\vec{{{content}}}$" # 穿上乾淨的外衣
 
-    # (c) 修復其他常見符號
-    text = re.sub(r'(?<!\$)\\(sin|cos|tan|cot|lim|sum|int|sqrt|theta|pi|cdot|times)(?![a-zA-Z])(?!\$)', r'$\\\1$', text)
+    def smart_wrap_frac(match):
+        num = match.group(1).replace('$', '')
+        den = match.group(2).replace('$', '')
+        return f"$\\frac{{{num}}}{{{den}}}$"
 
-    # 5. 垂直膠水 (修復斷行)
+    # 套用智慧修復
+    text = re.sub(r'(?<!\$)\\vec\{([^}]+)\}(?!\$)', smart_wrap_vec, text)
+    text = re.sub(r'(?<!\$)\\frac\{([^}]+)\}\{([^}]+)\}(?!\$)', smart_wrap_frac, text)
+    text = re.sub(r'(?<!\$)\\sqrt\{([^}]+)\}(?!\$)', lambda m: f"$\\sqrt{{{m.group(1).replace('$', '')}}}$", text)
+
+    # 修復其他常見符號 (無參數的)
+    text = re.sub(r'(?<!\$)\\(sin|cos|tan|cot|lim|sum|int|theta|pi|cdot|times)(?![a-zA-Z])(?!\$)', r'$\\\1$', text)
+
+    # 6. 垂直膠水
     for _ in range(2): 
         text = re.sub(r'\n\s*([=+\-*/|<>])\s*\n', r' \1 ', text)
         text = re.sub(r'\n\s*(\\[a-zA-Z]+(?:\{.*?\})?)\s*\n', r' \1 ', text)
     
-    # 6. 基本修復
+    # 7. 基本修復
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
     cjk = r'[\u4e00-\u9fa5]'
@@ -366,7 +378,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v9.9 (向量分數強力修復版 12/30)")
+    st.caption("Jutor AI 教學系統 v10.0 (智慧內顯修復版 12/30)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -630,7 +642,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.session_state.uploaded_file_bytes = None
                 st.rerun()
 
-    # --- v9.9 核心：原地復活重刷 (不會白畫面) ---
+    # --- v9.9 原地復活重刷 (不會白畫面) ---
     if not st.session_state.is_reporting:
         st.markdown("")
         st.markdown("")
