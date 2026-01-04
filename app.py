@@ -327,7 +327,7 @@ if not st.session_state.is_solving:
                     loading_text = "Jutor Pro (2.5) 正在深度分析並修復錯誤..."
                 else:
                     if mode == "toxic":
-                        loading_text = "Jutor AI (2.5) 正在深呼吸準備開罵..."
+                        loading_text = "Jutor AI (2.5) 正在深呼吸準備噴你..."
                     else:
                         loading_text = "Jutor AI (2.5) 正在思考怎麼教會你這題..."
                 
@@ -373,6 +373,10 @@ if not st.session_state.is_solving:
                                - "我看你段考想包一個大的"
                                - "這個忘了你是想決戰188嗎？"
                                - "欸不是，這我3歲就會了耶！"
+                               - "我說真的，菜就多練！"
+                               - "這種東西多問幾次，我血壓會比你總成績還高"
+                               - "我懷疑你是故意想被我罵才來問這題"
+                               - "我如果被你氣死，記得幫我看廣告復活"
                             4. 任務：除了使用上述金句，請發揮創意繼續吐槽學生的智商，展現出「這種題目也能錯？」的崩潰感，但最後必須「無奈地」把題目教懂。
                             """
                         else:
