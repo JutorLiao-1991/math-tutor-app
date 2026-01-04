@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import numpy as np
+import uuid # 新增 UUID 用於生成隨機擾動
 
 # --- 頁面設定 ---
 main_logo_path = "logo.jpg"
@@ -196,15 +197,10 @@ def execute_and_show_plot(code_snippet):
 def clean_output_format(text):
     if not text: return text
     text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
-    
-    # 1. 移除 Markdown Code Blocks
     text = re.sub(r'```python[\s\S]*?```', '', text) 
     text = text.replace("```latex", "").replace("```", "")
-
-    # 2. 反引號殺手
     text = re.sub(r'`([^`\n]+)`', r'$\1$', text)
 
-    # 3. 程式碼洩漏消音
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
@@ -217,16 +213,13 @@ def clean_output_format(text):
         cleaned_lines.append(line)
     text = "\n".join(cleaned_lines)
 
-    # 4. 強制轉 LaTeX 符號
     text = re.sub(r'(?<!\$)(\\begin\{[a-z]+\}[\s\S]*?\\end\{[a-z]+\})(?!\$)', r'$$\1$$', text)
     text = re.sub(r'(?<!\$)(\\(?:vec|frac|sin|cos|tan|cot|lim|sum|int)\{?[^}]*}?)(?!\$)', r'$\1$', text)
-
-    # 5. 垂直膠水 (修復斷行)
+    
     for _ in range(2): 
         text = re.sub(r'\n\s*([=+\-*/|<>])\s*\n', r' \1 ', text)
         text = re.sub(r'\n\s*(\\[a-zA-Z]+(?:\{.*?\})?)\s*\n', r' \1 ', text)
     
-    # 6. 基本修復
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
     cjk = r'[\u4e00-\u9fa5]'
@@ -234,7 +227,6 @@ def clean_output_format(text):
     for _ in range(2):
         pattern = f'(?<={cjk})\s*\\n+\s*({short_content})\s*\\n+\s*(?={cjk}|[，。！？：,.?])'
         text = re.sub(pattern, r' \1 ', text)
-        
     return text
 
 def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
@@ -277,7 +269,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v9.5 (全域重刷+UI回饋版 12/29)")
+    st.caption("Jutor AI 教學系統 v9.7 (有感重刷版 12/30)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -350,7 +342,7 @@ if not st.session_state.is_solving:
                         【排版絕對指令】
                         1. **MATH ONLY LATEX**: 所有的數學符號、算式，必須使用 LaTeX 格式 (例如 `$x^2$`)。
                         2. **NO MARKDOWN CODE**: 嚴禁使用 Markdown 代碼塊 (``` 或 ` ) 來包裹數學式。這會導致顯示為紅色代碼。
-                        3. **文字流暢**: 請輸出完整的段落。嚴禁在每個單詞或短語後換行，請保持語句連貫。
+                        3. **文字流暢**: 請輸出完整的段落。嚴禁在每個單詞或短語後換行 (No vertical stacking)。
                         4. **無程式碼**: 絕對不要在文字解釋中顯示 Python 運算過程或繪圖代碼。
                         """
                         plotting = """
@@ -375,10 +367,19 @@ if not st.session_state.is_solving:
                             風格：【地獄毒舌教練模式】
                             1. 態度：極度諷刺、嘴賤但心軟。
                             2. 語氣：請模仿台灣補習班嚴厲老師的口氣。
-                            3. 任務：先狠狠吐槽學生，然後再「無奈地」給出正確詳解。
+                            3. 【鳩特老師專屬口頭禪】(請在回應中自然融入 1~2 句，增強『本人』既視感)：
+                               - "這題不會可以包一包"
+                               - "看到想不到，學分全噴掉"
+                               - "我看你段考想包一個大的"
+                               - "這個忘了你是想決戰188嗎？"
+                               - "欸不是，這我3歲就會了耶！"
+                            4. 任務：除了使用上述金句，請發揮創意繼續吐槽學生的智商，展現出「這種題目也能錯？」的崩潰感，但最後必須「無奈地」把題目教懂。
                             """
                         else:
                             style = "風格：幽默口語。" 
+
+                        # --- v9.7 重點：加入隨機擾動 ---
+                        random_seed_marker = f"\n[System: Retry Seed {random.randint(1, 10000)}]"
 
                         prompt = f"""
                         {guardrail}
@@ -387,6 +388,7 @@ if not st.session_state.is_solving:
                         {plotting}
                         {common_role}
                         {style}
+                        {random_seed_marker}
                         
                         【題型辨識】請判斷是否為多選題，若有選出所有正確選項的指令，請逐一檢查。
 
@@ -616,7 +618,6 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.session_state.uploaded_file_bytes = None
                 st.rerun()
 
-    # --- v9.5 新增：全域底部工具列 (每頁都顯示) ---
     if not st.session_state.is_reporting:
         st.markdown("")
         st.markdown("")
@@ -624,15 +625,16 @@ if st.session_state.is_solving and st.session_state.solution_steps:
         col_util_1, col_util_2 = st.columns(2)
         
         with col_util_1:
-            # 亂碼重刷按鈕 (全域顯示)
             if st.button("🔄 出現亂碼？點我重新生成", use_container_width=True):
+                # --- v9.7 核心修改：強制清空舊資料 ---
+                st.session_state.solution_steps = [] 
+                st.session_state.step_index = 0
                 st.toast("🧹 正在強力修復亂碼中...", icon="🔄")
-                time.sleep(0.8) # 讓學生看得到提示
+                time.sleep(0.8) 
                 st.session_state.trigger_retry = True 
                 st.rerun() 
         
         with col_util_2:
-            # 錯誤回報按鈕
             if st.button("🚨 答案有錯，回報給鳩特", use_container_width=True, type="secondary"):
                 st.session_state.is_reporting = True
                 st.rerun()
