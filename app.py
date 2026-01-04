@@ -13,7 +13,6 @@ from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import numpy as np
-import uuid # 新增 UUID 用於生成隨機擾動
 
 # --- 頁面設定 ---
 main_logo_path = "logo.jpg"
@@ -167,6 +166,7 @@ if 'image_desc_cache' not in st.session_state: st.session_state.image_desc_cache
 if 'full_text_cache' not in st.session_state: st.session_state.full_text_cache = ""   
 if 'is_reporting' not in st.session_state: st.session_state.is_reporting = False
 if 'uploaded_file_bytes' not in st.session_state: st.session_state.uploaded_file_bytes = None
+if 'last_question_text' not in st.session_state: st.session_state.last_question_text = ""
 
 # --- 函數區 ---
 def trigger_vibration():
@@ -193,14 +193,17 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- 排版修復邏輯 ---
+# --- v9.9 核心修復：向量與分數的暴力美學 ---
 def clean_output_format(text):
     if not text: return text
     text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
+    
+    # 1. 移除程式碼區塊標記
     text = re.sub(r'```python[\s\S]*?```', '', text) 
     text = text.replace("```latex", "").replace("```", "")
-    text = re.sub(r'`([^`\n]+)`', r'$\1$', text)
+    text = re.sub(r'`([^`\n]+)`', r'$\1$', text) # 反引號殺手
 
+    # 2. 程式碼洩漏消音 (A4_x 修正)
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
@@ -213,13 +216,26 @@ def clean_output_format(text):
         cleaned_lines.append(line)
     text = "\n".join(cleaned_lines)
 
+    # 3. 裸奔矩陣修復
     text = re.sub(r'(?<!\$)(\\begin\{[a-z]+\}[\s\S]*?\\end\{[a-z]+\})(?!\$)', r'$$\1$$', text)
-    text = re.sub(r'(?<!\$)(\\(?:vec|frac|sin|cos|tan|cot|lim|sum|int)\{?[^}]*}?)(?!\$)', r'$\1$', text)
+
+    # 4. 【核心更新】針對 \vec 和 \frac 的強力修復
+    # (a) 修復向量：只要看到 \vec{...} 且外面沒有 $，就強制加上
+    # Regex 解釋：(?<!\$) 確保前面沒 $，\\vec\{([^}]+)\} 抓取花括號內的任何內容(排除嵌套)，(?!\$) 確保後面沒 $
+    text = re.sub(r'(?<!\$)\\vec\{([^}]+)\}(?!\$)', r'$\\vec{\1}$', text)
     
+    # (b) 修復分數：只要看到 \frac{...}{...} 且外面沒有 $，就強制加上
+    text = re.sub(r'(?<!\$)\\frac\{([^}]+)\}\{([^}]+)\}(?!\$)', r'$\\frac{\1}{\2}$', text)
+
+    # (c) 修復其他常見符號
+    text = re.sub(r'(?<!\$)\\(sin|cos|tan|cot|lim|sum|int|sqrt|theta|pi|cdot|times)(?![a-zA-Z])(?!\$)', r'$\\\1$', text)
+
+    # 5. 垂直膠水 (修復斷行)
     for _ in range(2): 
         text = re.sub(r'\n\s*([=+\-*/|<>])\s*\n', r' \1 ', text)
         text = re.sub(r'\n\s*(\\[a-zA-Z]+(?:\{.*?\})?)\s*\n', r' \1 ', text)
     
+    # 6. 基本修復
     text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
     text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
     cjk = r'[\u4e00-\u9fa5]'
@@ -227,6 +243,7 @@ def clean_output_format(text):
     for _ in range(2):
         pattern = f'(?<={cjk})\s*\\n+\s*({short_content})\s*\\n+\s*(?={cjk}|[，。！？：,.?])'
         text = re.sub(pattern, r' \1 ', text)
+        
     return text
 
 def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
@@ -260,6 +277,86 @@ def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
                 raise e
     raise last_error
 
+# --- 輔助函式：產生 Prompt ---
+def build_prompt(grade, target, mode):
+    guardrail = "【過濾機制】請辨識圖片內容。若明顯為「自拍照、風景照、寵物照」等與學習無關的圖片，請回傳 REFUSE_OFF_TOPIC。若是數學題目、文字截圖、圖表分析，即使模糊或非典型格式，也請回答。"
+    transcription = f"【隱藏任務】將題目 '{target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
+    formatting = """
+    【排版絕對指令】
+    1. **MATH ONLY LATEX**: 所有的數學符號、算式，必須使用 LaTeX 格式 (例如 `$x^2$`)。
+    2. **NO MARKDOWN CODE**: 嚴禁使用 Markdown 代碼塊 (``` 或 ` ) 來包裹數學式。這會導致顯示為紅色代碼。
+    3. **文字流暢**: 請輸出完整的段落。嚴禁在每個單詞或短語後換行，請保持語句連貫。
+    4. **無程式碼**: 絕對不要在文字解釋中顯示 Python 運算過程或繪圖代碼。
+    """
+    plotting = """
+    【繪圖能力啟動】
+    1. 只有當題目明確涉及「函數圖形」、「幾何座標」、「統計圖表」時，才生成 Python 程式碼。
+    2. 程式碼必須能直接執行，並包在 `===PLOT===` 與 `===PLOT_END===` 之間。
+    3. 圖表標題、座標軸請使用中文。
+    4. ⚠️ 嚴格 LaTeX 規範：所有包含 LaTeX 語法的字串（如標題、標籤），**必須** 使用 Python raw string (例如 r'$y=x^2$')。
+    5. ⚠️ 避免在 title 使用過於複雜的 LaTeX (如 \left, \right)，若必須使用，請確保語法完美閉合。
+    6. ⚠️ 3D繪圖：若是空間坐標題，請務必使用 `ax = fig.add_subplot(111, projection='3d')`。
+    """
+    common_role = f"角色：你是 Jutor。年級：{grade}。題目：{target}。"
+    if grade in ["小五", "小六"]:
+        common_role += "【重要】學生為台灣國小生，請嚴格遵守台灣國小數學課綱：1. 避免使用二元一次聯立方程式或過於抽象的代數符號(x,y)。2. 多使用「線段圖」、「基準量比較量」或具體數字推演來解釋。3. 語言要更白話、具體。"
+
+    if mode == "verbal":
+        style = "風格：幽默口語、譬喻教學、步驟化。"
+    elif mode == "math":
+        style = "風格：純算式、LaTeX、極簡。"
+    elif mode == "toxic":
+        style = """
+        風格：【鳩特地獄教練模式 (Toxic Mode)】
+        1. 態度：極度諷刺、嘴賤但心軟、恨鐵不成鋼。
+        2. 語氣：請模仿台灣補習班嚴厲老師的口氣。
+        3. 【鳩特老師專屬口頭禪】(請在回應中自然融入 1~2 句，增強『本人』既視感)：
+            - "這題不會可以包一包"
+            - "看到想不到，學分全噴掉"
+            - "我看你段考想包一個大的"
+            - "這個忘了你是想決戰188嗎？"
+            - "欸不是，這我3歲就會了耶！"
+        4. 任務：除了使用上述金句，請發揮創意繼續吐槽學生的智商，展現出「這種題目也能錯？」的崩潰感，但最後必須「無奈地」把題目教懂。
+        """
+    else:
+        style = "風格：幽默口語。" 
+
+    return f"""
+    {guardrail}
+    {transcription}
+    {formatting}
+    {plotting}
+    {common_role}
+    {style}
+    
+    【題型辨識】請判斷是否為多選題，若有選出所有正確選項的指令，請逐一檢查。
+
+    【輸出結構嚴格要求 - 請用 `===STEP===` 分隔】
+    1. **解題過程** (為了避免資訊過載，請將過程拆解為 **4~6 個** 短步驟，每一步只講一個核心觀念)
+    ===STEP===
+    (步驟1...)
+    ===STEP===
+    (步驟2...)
+    ===STEP===
+    ...
+    
+    2. **本題答案** (標題與答案必須在同一個STEP)
+    ### 💡 本題答案
+    (請在此列出最終答案，如 x=16 或 x=18)
+    
+    ===STEP===
+    
+    3. **驗收類題** (標題與題目必須在同一個STEP)
+    ### 🎯 驗收類題
+    (請在此處直接出題，包含所有題目資訊)
+    
+    ===STEP===
+    
+    4. **類題答案** (最後一個STEP)
+    🗝️ 類題答案
+    (僅提供最終答案，不需詳解)
+    """
+
 col1, col2 = st.columns([1, 4]) 
 with col1:
     if os.path.exists(main_logo_path):
@@ -269,7 +366,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v9.7 (有感重刷版 12/30)")
+    st.caption("Jutor AI 教學系統 v9.9 (向量分數強力修復版 12/30)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -300,16 +397,13 @@ if not st.session_state.is_solving:
         with col_btn_toxic:
             start_toxic = st.button("☠️ 毒舌模式", use_container_width=True)
 
-        if start_verbal or start_math or start_toxic or st.session_state.trigger_rescue or st.session_state.trigger_retry:
+        if start_verbal or start_math or start_toxic or st.session_state.trigger_rescue:
             if not question_target:
                 st.warning("⚠️ 請先輸入你想問哪一題！")
-                st.session_state.trigger_retry = False 
             else:
-                if st.session_state.trigger_retry:
-                    mode = st.session_state.solve_mode
-                    use_pro = st.session_state.use_pro_model
-                    st.session_state.trigger_retry = False 
-                elif st.session_state.trigger_rescue:
+                st.session_state.last_question_text = question_target
+                
+                if st.session_state.trigger_rescue:
                     mode = st.session_state.solve_mode
                     use_pro = True 
                     st.session_state.use_pro_model = True
@@ -327,7 +421,7 @@ if not st.session_state.is_solving:
                     loading_text = "Jutor Pro (2.5) 正在深度分析並修復錯誤..."
                 else:
                     if mode == "toxic":
-                        loading_text = "Jutor AI (2.5) 正在深呼吸準備噴你..."
+                        loading_text = "Jutor AI (2.5) 正在深呼吸準備開罵..."
                     else:
                         loading_text = "Jutor AI (2.5) 正在思考怎麼教會你這題..."
                 
@@ -336,91 +430,7 @@ if not st.session_state.is_solving:
                         if uploaded_file is not None:
                             st.session_state.uploaded_file_bytes = uploaded_file.getvalue()
 
-                        guardrail = "【過濾機制】請辨識圖片內容。若明顯為「自拍照、風景照、寵物照」等與學習無關的圖片，請回傳 REFUSE_OFF_TOPIC。若是數學題目、文字截圖、圖表分析，即使模糊或非典型格式，也請回答。"
-                        transcription = f"【隱藏任務】將題目 '{question_target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
-                        formatting = """
-                        【排版絕對指令】
-                        1. **MATH ONLY LATEX**: 所有的數學符號、算式，必須使用 LaTeX 格式 (例如 `$x^2$`)。
-                        2. **NO MARKDOWN CODE**: 嚴禁使用 Markdown 代碼塊 (``` 或 ` ) 來包裹數學式。這會導致顯示為紅色代碼。
-                        3. **文字流暢**: 請輸出完整的段落。嚴禁在每個單詞或短語後換行 (No vertical stacking)。
-                        4. **無程式碼**: 絕對不要在文字解釋中顯示 Python 運算過程或繪圖代碼。
-                        """
-                        plotting = """
-                        【繪圖能力啟動】
-                        1. 只有當題目明確涉及「函數圖形」、「幾何座標」、「統計圖表」時，才生成 Python 程式碼。
-                        2. 程式碼必須能直接執行，並包在 `===PLOT===` 與 `===PLOT_END===` 之間。
-                        3. 圖表標題、座標軸請使用中文。
-                        4. ⚠️ 嚴格 LaTeX 規範：所有包含 LaTeX 語法的字串（如標題、標籤），**必須** 使用 Python raw string (例如 r'$y=x^2$')。
-                        5. ⚠️ 避免在 title 使用過於複雜的 LaTeX (如 \left, \right)，若必須使用，請確保語法完美閉合。
-                        6. ⚠️ 3D繪圖：若是空間坐標題，請務必使用 `ax = fig.add_subplot(111, projection='3d')`。
-                        """
-                        common_role = f"角色：你是 Jutor。年級：{selected_grade}。題目：{question_target}。"
-                        if selected_grade in ["小五", "小六"]:
-                            common_role += "【重要】學生為台灣國小生，請嚴格遵守台灣國小數學課綱：1. 避免使用二元一次聯立方程式或過於抽象的代數符號(x,y)。2. 多使用「線段圖」、「基準量比較量」或具體數字推演來解釋。3. 語言要更白話、具體。"
-
-                        if mode == "verbal":
-                            style = "風格：幽默口語、譬喻教學、步驟化。"
-                        elif mode == "math":
-                            style = "風格：純算式、LaTeX、極簡。"
-                        elif mode == "toxic":
-                            style = """
-                            風格：【地獄毒舌教練模式】
-                            1. 態度：極度諷刺、嘴賤但心軟。
-                            2. 語氣：請模仿台灣補習班嚴厲老師的口氣。
-                            3. 【鳩特老師專屬口頭禪】(請在回應中自然融入 1~2 句，增強『本人』既視感)：
-                               - "這題不會可以包一包"
-                               - "看到想不到，學分全噴掉"
-                               - "我看你段考想包一個大的"
-                               - "這個忘了你是想決戰188嗎？"
-                               - "欸不是，這我3歲就會了耶！"
-                               - "我說真的，菜就多練！"
-                               - "這種東西多問幾次，我血壓會比你總成績還高"
-                               - "我懷疑你是故意想被我罵才來問這題"
-                               - "我如果被你氣死，記得幫我看廣告復活"
-                            4. 任務：除了使用上述金句，請發揮創意繼續吐槽學生的智商，展現出「這種題目也能錯？」的崩潰感，但最後必須「無奈地」把題目教懂。
-                            """
-                        else:
-                            style = "風格：幽默口語。" 
-
-                        # --- v9.7 重點：加入隨機擾動 ---
-                        random_seed_marker = f"\n[System: Retry Seed {random.randint(1, 10000)}]"
-
-                        prompt = f"""
-                        {guardrail}
-                        {transcription}
-                        {formatting}
-                        {plotting}
-                        {common_role}
-                        {style}
-                        {random_seed_marker}
-                        
-                        【題型辨識】請判斷是否為多選題，若有選出所有正確選項的指令，請逐一檢查。
-
-                        【輸出結構嚴格要求 - 請用 `===STEP===` 分隔】
-                        1. **解題過程** (為了避免資訊過載，請將過程拆解為 **4~6 個** 短步驟，每一步只講一個核心觀念)
-                        ===STEP===
-                        (步驟1...)
-                        ===STEP===
-                        (步驟2...)
-                        ===STEP===
-                        ...
-                        
-                        2. **本題答案** (標題與答案必須在同一個STEP)
-                        ### 💡 本題答案
-                        (請在此列出最終答案，如 x=16 或 x=18)
-                        
-                        ===STEP===
-                        
-                        3. **驗收類題** (標題與題目必須在同一個STEP)
-                        ### 🎯 驗收類題
-                        (請在此處直接出題，包含所有題目資訊)
-                        
-                        ===STEP===
-                        
-                        4. **類題答案** (最後一個STEP)
-                        🗝️ 類題答案
-                        (僅提供最終答案，不需詳解)
-                        """
+                        prompt = build_prompt(selected_grade, question_target, mode)
 
                         response, key_suffix = call_gemini_with_rotation(prompt, image, use_pro=use_pro)
                         st.session_state.used_key_suffix = key_suffix
@@ -439,10 +449,8 @@ if not st.session_state.is_solving:
                             st.session_state.full_text_cache = full_text
 
                             plot_code = None
-                            
                             if "===PLOT===" in full_text and "===PLOT_END===" not in full_text:
                                 full_text += "\n===PLOT_END==="
-                                
                             plot_match = re.search(r"===PLOT===(.*?)===PLOT_END===", full_text, re.DOTALL)
                             if plot_match:
                                 plot_code = plot_match.group(1).strip()
@@ -622,6 +630,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.session_state.uploaded_file_bytes = None
                 st.rerun()
 
+    # --- v9.9 核心：原地復活重刷 (不會白畫面) ---
     if not st.session_state.is_reporting:
         st.markdown("")
         st.markdown("")
@@ -630,13 +639,43 @@ if st.session_state.is_solving and st.session_state.solution_steps:
         
         with col_util_1:
             if st.button("🔄 出現亂碼？點我重新生成", use_container_width=True):
-                # --- v9.7 核心修改：強制清空舊資料 ---
-                st.session_state.solution_steps = [] 
-                st.session_state.step_index = 0
                 st.toast("🧹 正在強力修復亂碼中...", icon="🔄")
-                time.sleep(0.8) 
-                st.session_state.trigger_retry = True 
-                st.rerun() 
+                
+                try:
+                    import io
+                    img_bytes = st.session_state.uploaded_file_bytes
+                    img_obj = Image.open(io.BytesIO(img_bytes))
+                    q_text = st.session_state.last_question_text
+                    mode = st.session_state.solve_mode
+                    grade = selected_grade
+                    prompt = build_prompt(grade, q_text, mode)
+                    
+                    with st.spinner("🔄 Jutor 正在重新思考..."):
+                        response, _ = call_gemini_with_rotation(prompt, img_obj, use_pro=st.session_state.use_pro_model)
+                        full_text = clean_output_format(response.text)
+                        
+                        image_desc = "無描述"
+                        desc_match = re.search(r"===DESC===(.*?)===DESC_END===", full_text, re.DOTALL)
+                        if desc_match:
+                            full_text = full_text.replace(desc_match.group(0), "")
+                        
+                        plot_code = None
+                        if "===PLOT===" in full_text and "===PLOT_END===" not in full_text:
+                            full_text += "\n===PLOT_END==="
+                        plot_match = re.search(r"===PLOT===(.*?)===PLOT_END===", full_text, re.DOTALL)
+                        if plot_match:
+                            plot_code = plot_match.group(1).strip()
+                            plot_code = plot_code.replace("```python", "").replace("```", "")
+                            full_text = full_text.replace(plot_match.group(0), "")
+                        
+                        st.session_state.plot_code = plot_code
+                        raw_steps = full_text.split("===STEP===")
+                        st.session_state.solution_steps = [step.strip() for step in raw_steps if step.strip()]
+                        
+                        st.session_state.step_index = 0
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"重刷失敗：{e}")
         
         with col_util_2:
             if st.button("🚨 答案有錯，回報給鳩特", use_container_width=True, type="secondary"):
