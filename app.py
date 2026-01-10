@@ -650,44 +650,87 @@ if st.session_state.is_solving and st.session_state.solution_steps:
         col_util_1, col_util_2 = st.columns(2)
         
         with col_util_1:
-            if st.button("🔄 出現亂碼？點我重新生成", use_container_width=True):
-                st.toast("🧹 正在強力修復亂碼中...", icon="🔄")
+            # 更改按鈕文字，明確表示是「修復格式」
+            if st.button("🔧 內容沒錯但亂碼？點我修復", use_container_width=True):
+                st.toast("🚑 Jutor 正在進行微創手術 (修復格式)...", icon="🩹")
                 
                 try:
-                    import io
-                    img_bytes = st.session_state.uploaded_file_bytes
-                    img_obj = Image.open(io.BytesIO(img_bytes))
-                    q_text = st.session_state.last_question_text
-                    mode = st.session_state.solve_mode
-                    grade = selected_grade
-                    prompt = build_prompt(grade, q_text, mode)
+                    # 讀取目前畫面上的完整文字 (包含那些亂碼)
+                    bad_text = st.session_state.full_text_cache
                     
-                    with st.spinner("🔄 Jutor 正在重新思考..."):
-                        response, _ = call_gemini_with_rotation(prompt, img_obj, use_pro=st.session_state.use_pro_model)
-                        full_text = clean_output_format(response.text)
+                    if not bad_text:
+                        st.warning("⚠️ 目前沒有內容可以修復喔！")
+                    else:
+                        # --- 建構修復專用 Prompt ---
+                        repair_prompt = f"""
+                        【任務：Markdown/LaTeX 格式嚴格修復】
+                        你是一個專業的技術編輯。請讀取以下教學文本，並進行「格式修復」。
                         
-                        image_desc = "無描述"
-                        desc_match = re.search(r"===DESC===(.*?)===DESC_END===", full_text, re.DOTALL)
-                        if desc_match:
-                            full_text = full_text.replace(desc_match.group(0), "")
+                        ⚠️【絕對禁止】
+                        1. 禁止更改任何教學內容、解題步驟、語氣或文字說明。
+                        2. 禁止重新解題。
+                        3. 禁止移除 ===STEP===, ===DESC===, ===PLOT=== 等結構標籤。
+
+                        ✅【必須執行】
+                        1. 找出所有數學算式（如 x^2, 3/4, \pi, \frac{}{}），確保前後加上 `$` 符號使其正確渲染。
+                           - 範例：將 `x^2` 改為 `$x^2$`
+                           - 範例：將 `\frac{1}{2}` 改為 `$\frac{1}{2}$`
+                        2. 修正任何破損的 LaTeX 語法。
+                        3. 保持原本的換行與段落結構。
+
+                        ---待修復文本開始---
+                        {bad_text}
+                        ---待修復文本結束---
                         
-                        plot_code = None
-                        if "===PLOT===" in full_text and "===PLOT_END===" not in full_text:
-                            full_text += "\n===PLOT_END==="
-                        plot_match = re.search(r"===PLOT===(.*?)===PLOT_END===", full_text, re.DOTALL)
-                        if plot_match:
-                            plot_code = plot_match.group(1).strip()
-                            plot_code = plot_code.replace("```python", "").replace("```", "")
-                            full_text = full_text.replace(plot_match.group(0), "")
-                        
-                        st.session_state.plot_code = plot_code
-                        raw_steps = full_text.split("===STEP===")
-                        st.session_state.solution_steps = [step.strip() for step in raw_steps if step.strip()]
-                        
-                        st.session_state.step_index = 0
-                        st.rerun()
+                        請輸出修復後的完整文本：
+                        """
+
+                        with st.spinner("🔧 Jutor 正在重新排版數學式..."):
+                            # 呼叫 AI (這裡不需要圖片，只要送出文字即可)
+                            # 為了求快與精準，這裡我們可以用 flash，或者如果覺得 flash 修不好，也可以強制 use_pro=True
+                            response, _ = call_gemini_with_rotation(repair_prompt, image_input=None, use_pro=st.session_state.use_pro_model)
+                            
+                            # 再次經過 regex 清洗 (雙重保險)
+                            fixed_text = clean_output_format(response.text)
+                            
+                            # --- 處理結構 ---
+                            # 1. 保留原本的圖片描述 (通常修復過程 AI 可能會省略或動到，我們直接用原本 Cache 的比較安全，或者信任 AI 回傳)
+                            # 這裡選擇信任 AI 回傳的 text，但如果 AI 意外把 DESC 拿掉，我們通常也不顯示 DESC，所以沒關係。
+                            
+                            # 2. 重新解析 Plot (若 AI 把 Plot code 搞壞，我們嘗試保留原本的)
+                            # 但通常純文字修復不應該動到 code block。
+                            
+                            # 更新 Cache
+                            st.session_state.full_text_cache = fixed_text
+                            
+                            # 更新步驟 List
+                            # 先把 Plot 分離
+                            plot_code = None
+                            if "===PLOT===" in fixed_text and "===PLOT_END===" not in fixed_text:
+                                fixed_text += "\n===PLOT_END==="
+                            plot_match = re.search(r"===PLOT===(.*?)===PLOT_END===", fixed_text, re.DOTALL)
+                            if plot_match:
+                                plot_code = plot_match.group(1).strip()
+                                plot_code = plot_code.replace("```python", "").replace("```", "")
+                                fixed_text = fixed_text.replace(plot_match.group(0), "")
+                            
+                            # 如果這次修復弄丟了 plot_code，但原本有，我們把它加回來 (避免修復後圖不見)
+                            if not plot_code and st.session_state.plot_code:
+                                plot_code = st.session_state.plot_code
+                            else:
+                                st.session_state.plot_code = plot_code
+
+                            # 切割步驟
+                            raw_steps = fixed_text.split("===STEP===")
+                            st.session_state.solution_steps = [step.strip() for step in raw_steps if step.strip()]
+                            
+                            # 保持在當前步驟，不用回到 step 0，這樣體驗更好 (或者回到 0 也可以)
+                            # st.session_state.step_index = 0 
+                            
+                            st.rerun()
+
                 except Exception as e:
-                    st.error(f"重刷失敗：{e}")
+                    st.error(f"修復失敗：{e}")
         
         with col_util_2:
             if st.button("🚨 答案有錯，回報給鳩特", use_container_width=True, type="secondary"):
