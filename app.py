@@ -661,7 +661,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                     if not bad_text:
                         st.warning("⚠️ 目前沒有內容可以修復喔！")
                     else:
-                        # --- 建構修復專用 Prompt ---
+                    # --- 建構修復專用 Prompt (修正語法版) ---
                         repair_prompt = f"""
                         【任務：Markdown/LaTeX 格式嚴格修復】
                         你是一個專業的技術編輯。請讀取以下教學文本，並進行「格式修復」。
@@ -672,9 +672,9 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                         3. 禁止移除 ===STEP===, ===DESC===, ===PLOT=== 等結構標籤。
 
                         ✅【必須執行】
-                        1. 找出所有數學算式（如 x^2, 3/4, \pi, \frac{}{}），確保前後加上 `$` 符號使其正確渲染。
+                        1. 找出所有數學算式（如 x^2, 3/4, \\pi, \\frac{{}}{{}}），確保前後加上 `$` 符號使其正確渲染。
                            - 範例：將 `x^2` 改為 `$x^2$`
-                           - 範例：將 `\frac{1}{2}` 改為 `$\frac{1}{2}$`
+                           - 範例：將 `\\frac{{1}}{{2}}` 改為 `$\\frac{{1}}{{2}}$`
                         2. 修正任何破損的 LaTeX 語法。
                         3. 保持原本的換行與段落結構。
 
