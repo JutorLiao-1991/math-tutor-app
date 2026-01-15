@@ -649,84 +649,78 @@ if st.session_state.is_solving and st.session_state.solution_steps:
         
         col_util_1, col_util_2 = st.columns(2)
         
-        with col_util_1:
-            # 更改按鈕文字，明確表示是「修復格式」
+with col_util_1:
             if st.button("🔧 內容沒錯但亂碼？點我修復", use_container_width=True):
-                st.toast("🚑 Jutor 正在進行微創手術 (修復格式)...", icon="🩹")
+                st.toast("🚑 正在請求主任醫師 (Pro) 進行微創手術...", icon="👨‍⚕️")
                 
                 try:
-                    # 讀取目前畫面上的完整文字 (包含那些亂碼)
                     bad_text = st.session_state.full_text_cache
                     
                     if not bad_text:
                         st.warning("⚠️ 目前沒有內容可以修復喔！")
                     else:
-                    # --- 建構修復專用 Prompt (修正語法版) ---
+                        # --- 建構修復專用 Prompt (強化版) ---
                         repair_prompt = f"""
-                        【任務：Markdown/LaTeX 格式嚴格修復】
-                        你是一個專業的技術編輯。請讀取以下教學文本，並進行「格式修復」。
+                        【任務：Streamlit LaTeX 格式渲染修復】
+                        你是一個 Python Streamlit 介面優化專家。
+                        目前的數學教學文本無法在 Streamlit 中正確渲染，因為缺少了 LaTeX 分隔符號。
                         
-                        ⚠️【絕對禁止】
-                        1. 禁止更改任何教學內容、解題步驟、語氣或文字說明。
-                        2. 禁止重新解題。
-                        3. 禁止移除 ===STEP===, ===DESC===, ===PLOT=== 等結構標籤。
-
-                        ✅【必須執行】
-                        1. 找出所有數學算式（如 x^2, 3/4, \\pi, \\frac{{}}{{}}），確保前後加上 `$` 符號使其正確渲染。
-                           - 範例：將 `x^2` 改為 `$x^2$`
-                           - 範例：將 `\\frac{{1}}{{2}}` 改為 `$\\frac{{1}}{{2}}$`
-                        2. 修正任何破損的 LaTeX 語法。
-                        3. 保持原本的換行與段落結構。
-
-                        ---待修復文本開始---
+                        請重新輸出下方的文本，並嚴格遵守以下規則：
+                        
+                        1. ✅ **強制包裹數學式**：
+                           所有的 LaTeX 數學語法（例如 `\\frac`, `\\sqrt`, `^2`, `\\approx`, `\\pm` 等），**必須**前後加上單錢字號 `$` 包裹。
+                           - 錯誤範例： `y = x^2`
+                           - 正確範例： `$y = x^2$`
+                           - 錯誤範例： `\\frac{{1}}{{2}}`
+                           - 正確範例： `$\\frac{{1}}{{2}}$`
+                        
+                        2. 🛡️ **巢狀結構注意**：
+                           遇到複雜數學式（如分數內有根號），請確保 `$` 包裹在最外層。
+                           - 正確： `$\\frac{{-b \\pm \\sqrt{{b^2-4ac}}}}{{2a}}$`
+                        
+                        3. 🚫 **禁止更動內容**：
+                           嚴禁修改原本的中文解說、數字或計算步驟，僅做格式標記。
+                        
+                        ---待修復文本---
                         {bad_text}
-                        ---待修復文本結束---
-                        
-                        請輸出修復後的完整文本：
+                        ---結束---
                         """
 
-                        with st.spinner("🔧 Jutor 正在重新排版數學式..."):
-                            # 呼叫 AI (這裡不需要圖片，只要送出文字即可)
-                            # 為了求快與精準，這裡我們可以用 flash，或者如果覺得 flash 修不好，也可以強制 use_pro=True
-                            response, _ = call_gemini_with_rotation(repair_prompt, image_input=None, use_pro=st.session_state.use_pro_model)
+                        with st.spinner("🔧 Jutor Pro 正在精細排版中..."):
+                            # ⚠️ 關鍵修改：這裡強制 use_pro=True，確保指令遵循度最高
+                            response, _ = call_gemini_with_rotation(repair_prompt, image_input=None, use_pro=True)
                             
-                            # 再次經過 regex 清洗 (雙重保險)
-                            fixed_text = clean_output_format(response.text)
+                            # 取得修復後的文字
+                            fixed_text = response.text
                             
-                            # --- 處理結構 ---
-                            # 1. 保留原本的圖片描述 (通常修復過程 AI 可能會省略或動到，我們直接用原本 Cache 的比較安全，或者信任 AI 回傳)
-                            # 這裡選擇信任 AI 回傳的 text，但如果 AI 意外把 DESC 拿掉，我們通常也不顯示 DESC，所以沒關係。
+                            # 再次清洗 (主要為了去除可能多餘的 markdown code block 符號)
+                            fixed_text = clean_output_format(fixed_text)
                             
-                            # 2. 重新解析 Plot (若 AI 把 Plot code 搞壞，我們嘗試保留原本的)
-                            # 但通常純文字修復不應該動到 code block。
-                            
-                            # 更新 Cache
+                            # --- 保存與更新狀態 ---
                             st.session_state.full_text_cache = fixed_text
                             
-                            # 更新步驟 List
-                            # 先把 Plot 分離
+                            # 嘗試保留圖表代碼 (如果修復過程中 AI 遺漏的話)
                             plot_code = None
                             if "===PLOT===" in fixed_text and "===PLOT_END===" not in fixed_text:
                                 fixed_text += "\n===PLOT_END==="
                             plot_match = re.search(r"===PLOT===(.*?)===PLOT_END===", fixed_text, re.DOTALL)
+                            
                             if plot_match:
                                 plot_code = plot_match.group(1).strip()
                                 plot_code = plot_code.replace("```python", "").replace("```", "")
                                 fixed_text = fixed_text.replace(plot_match.group(0), "")
                             
-                            # 如果這次修復弄丟了 plot_code，但原本有，我們把它加回來 (避免修復後圖不見)
+                            # 如果 AI 修復後把 plot 弄丟了，從舊紀錄找回來
                             if not plot_code and st.session_state.plot_code:
                                 plot_code = st.session_state.plot_code
                             else:
                                 st.session_state.plot_code = plot_code
 
-                            # 切割步驟
+                            # 更新步驟
                             raw_steps = fixed_text.split("===STEP===")
                             st.session_state.solution_steps = [step.strip() for step in raw_steps if step.strip()]
                             
-                            # 保持在當前步驟，不用回到 step 0，這樣體驗更好 (或者回到 0 也可以)
-                            # st.session_state.step_index = 0 
-                            
+                            # 重新渲染
                             st.rerun()
 
                 except Exception as e:
