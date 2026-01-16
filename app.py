@@ -649,7 +649,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
         
         col_util_1, col_util_2 = st.columns(2)
         
-with col_util_1:
+        with col_util_1:
             if st.button("🔧 內容沒錯但亂碼？點我修復", use_container_width=True):
                 st.toast("🚑 正在請求主任醫師 (Pro) 進行微創手術...", icon="👨‍⚕️")
                 
