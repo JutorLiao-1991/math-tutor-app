@@ -20,7 +20,7 @@ if os.path.exists(main_logo_path):
     page_icon_set = Image.open(main_logo_path)
 else:
     page_icon_set = "🦔"
-assistant_avatar = "🦔" 
+assistant_avatar = "🦔"
 
 st.set_page_config(page_title="鳩特數理-AI Jutor", page_icon=page_icon_set, layout="centered")
 
@@ -34,7 +34,7 @@ def inject_custom_css():
         .stChatMessage .stChatMessageAvatar {
             width: 2.8rem;
             height: 2.8rem;
-            background-color: #f0f2f6; 
+            background-color: #f0f2f6;
             border-radius: 50%;
             object-fit: cover;
             font-size: 1.8rem;
@@ -67,7 +67,7 @@ def configure_chinese_font():
             prop = fm.FontProperties(fname=font_file)
             font_name = prop.get_name()
             plt.rcParams['font.family'] = font_name
-            plt.rcParams['axes.unicode_minus'] = False 
+            plt.rcParams['axes.unicode_minus'] = False
             return font_name
         except Exception as e:
             return "sans-serif"
@@ -106,7 +106,7 @@ def send_telegram_alert(grade, question_desc, ai_response, student_comment, stud
         if "telegram" in st.secrets:
             token = st.secrets["telegram"]["bot_token"]
             chat_id = st.secrets["telegram"]["chat_id"]
-            
+
             if image_bytes:
                 try:
                     files = {'photo': image_bytes}
@@ -115,7 +115,7 @@ def send_telegram_alert(grade, question_desc, ai_response, student_comment, stud
                 except Exception as img_err:
                     print(f"圖片發送失敗: {img_err}")
 
-            safe_response = ai_response[:3500] 
+            safe_response = ai_response[:3500]
             if len(ai_response) > 3500:
                 safe_response += "\n...(後續內容過長，請至 Sheet 查看)"
 
@@ -132,7 +132,7 @@ def send_telegram_alert(grade, question_desc, ai_response, student_comment, stud
 {safe_response}
 -----------------------
             """
-            
+
             url = f"https://api.telegram.org/bot{token}/sendMessage"
             payload = {
                 "chat_id": chat_id,
@@ -160,10 +160,10 @@ if 'data_saved' not in st.session_state: st.session_state.data_saved = False
 if 'plot_code' not in st.session_state: st.session_state.plot_code = None
 if 'use_pro_model' not in st.session_state: st.session_state.use_pro_model = False
 if 'trigger_rescue' not in st.session_state: st.session_state.trigger_rescue = False
-if 'trigger_retry' not in st.session_state: st.session_state.trigger_retry = False 
-if 'used_key_suffix' not in st.session_state: st.session_state.used_key_suffix = "" 
-if 'image_desc_cache' not in st.session_state: st.session_state.image_desc_cache = "" 
-if 'full_text_cache' not in st.session_state: st.session_state.full_text_cache = ""   
+if 'trigger_retry' not in st.session_state: st.session_state.trigger_retry = False
+if 'used_key_suffix' not in st.session_state: st.session_state.used_key_suffix = ""
+if 'image_desc_cache' not in st.session_state: st.session_state.image_desc_cache = ""
+if 'full_text_cache' not in st.session_state: st.session_state.full_text_cache = ""
 if 'is_reporting' not in st.session_state: st.session_state.is_reporting = False
 if 'uploaded_file_bytes' not in st.session_state: st.session_state.uploaded_file_bytes = None
 if 'last_question_text' not in st.session_state: st.session_state.last_question_text = ""
@@ -178,7 +178,7 @@ def execute_and_show_plot(code_snippet):
         plt.rcParams['font.family'] = CORRECT_FONT_NAME
         plt.rcParams['axes.unicode_minus'] = False
         plt.figure(figsize=(6, 4))
-        plt.style.use('seaborn-v0_8-whitegrid') 
+        plt.style.use('seaborn-v0_8-whitegrid')
         local_scope = {'plt': plt, 'np': np}
         exec(code_snippet, globals(), local_scope)
         ax = plt.gca()
@@ -193,24 +193,27 @@ def execute_and_show_plot(code_snippet):
     except Exception as e:
         st.warning(f"圖形繪製失敗: {e}")
 
-# --- v10.0 智慧內顯修復邏輯 ---
-import re
 
+# =====================================================================
+# 【核心改動 1】clean_output_format — 新策略：完全不碰 LaTeX 內容
+# 只做三件事：移除 code block、清除程式碼洩漏、修換行
+# =====================================================================
 def clean_output_format(text):
     if not text:
         return text
     text = text.strip().lstrip("'\"").rstrip("'\"")
 
-    # ── Step 1：貨幣保護，$100 → \$100，避免被誤判為數學開始 ──
-    text = re.sub(r'(?<!\\)\$(\d+)', r'\\$\1', text)
-
-    # ── Step 2：移除 Code Blocks ──
+    # Step 1：移除 Python code block（```python ... ```）
     text = re.sub(r'```python[\s\S]*?```', '', text)
-    text = text.replace("```latex", "").replace("```", "")
-    # 反引號包住的內容，改成 $ 包裹
-    text = re.sub(r'`([^`\n]+)`', r'$\1$', text)
 
-    # ── Step 3：程式碼洩漏消音（避免 plt / np 代碼出現在說明文字裡）──
+    # Step 2：移除剩餘的 ``` 符號（包含 ```latex）
+    text = re.sub(r'```[a-z]*', '', text)
+    text = text.replace("```", "")
+
+    # Step 3：反引號包住的內容，改成 $$ 包裹（避免被當成 code）
+    text = re.sub(r'`([^`\n]+)`', r'$$\1$$', text)
+
+    # Step 4：程式碼洩漏消音（避免 plt / np 代碼出現在說明文字裡）
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
@@ -223,180 +226,68 @@ def clean_output_format(text):
         cleaned_lines.append(line)
     text = "\n".join(cleaned_lines)
 
-    # ── Step 4：裸奔矩陣修復（\begin{} 沒有 $$ 包裹）──
-    text = re.sub(
-        r'(?<!\$)(\\begin\{[a-z\*]+\}[\s\S]*?\\end\{[a-z\*]+\})(?!\$)',
-        r'$$\1$$',
-        text
-    )
-
-    # ── Step 5：核心 — 先把換行切斷的 LaTeX 接回來 ──
-    # 狀況：一個算式被換行拆成多段，例如：
-    #   \cos C =
-    #   \frac{2}{4\sqrt{7}}
-    # 先把以 LaTeX 命令或運算符結尾的行，和下一行合併
-    for _ in range(5):  # 多跑幾輪，處理多層斷行
-        # 以 LaTeX 命令或 = + - * / 結尾的行 → 和下一行合併
-        text = re.sub(r'(\\[a-zA-Z]+(?:\{[^}]*\})*)\s*\n\s*(\\[a-zA-Z{(])', r'\1 \2', text)
-        text = re.sub(r'([=+\-*/^_,])\s*\n\s*(\\[a-zA-Z{(0-9\-])', r'\1 \2', text)
-        # 以 { 結尾（分數分子還沒結束）→ 合併
-        text = re.sub(r'(\{[^}]*)\n\s*([^}]*\})', r'\1 \2', text)
-        # 孤立的 ^2 C、^2 開頭的行 → 合併到上一行
-        text = re.sub(r'\n\s*(\^[0-9a-zA-Z])', r'\1', text)
-
-    # ── Step 6：智慧穿衣 — 把還沒被 $ 包住的 LaTeX 命令包起來 ──
-
-    def wrap_if_naked(pattern, replacement_fn, text):
-        """只在不在 $ ... $ 範圍內的地方套用替換"""
-        result = []
-        last = 0
-        # 先找出所有已經在 $ 內的區段，跳過它們
-        dollar_ranges = []
-        for m in re.finditer(r'\$\$[\s\S]*?\$\$|\$[^\$\n]+?\$', text):
-            dollar_ranges.append((m.start(), m.end()))
-
-        def in_dollar(pos):
-            for s, e in dollar_ranges:
-                if s <= pos < e:
-                    return True
-            return False
-
-        for m in re.finditer(pattern, text):
-            if not in_dollar(m.start()):
-                result.append(text[last:m.start()])
-                result.append(replacement_fn(m))
-                last = m.end()
-        result.append(text[last:])
-        return ''.join(result)
-
-    # 複雜算式（含有 \frac, \sqrt, \left, \right 的整段）
-    text = wrap_if_naked(
-        r'\\frac\{[^}]+\}\{[^}]+\}',
-        lambda m: f'${m.group(0)}$',
-        text
-    )
-    text = wrap_if_naked(
-        r'\\sqrt\{[^}]+\}',
-        lambda m: f'${m.group(0)}$',
-        text
-    )
-    text = wrap_if_naked(
-        r'\\vec\{[^}]+\}',
-        lambda m: f'${m.group(0)}$',
-        text
-    )
-
-    # 帶參數的三角函數式，例如 \cos C、\sin^2 C
-    text = wrap_if_naked(
-        r'\\(sin|cos|tan|cot|sec|csc)\s*[\^]?[0-9]?\s*[A-Za-z]',
-        lambda m: f'${m.group(0)}$',
-        text
-    )
-
-    # 無參數符號：\theta \pi \cdot \times \approx \pm \leq \geq \neq \infty
-    text = wrap_if_naked(
-        r'\\(theta|alpha|beta|gamma|delta|pi|infty|cdot|times|approx|pm|leq|geq|neq|sum|int|lim)(?![a-zA-Z])',
-        lambda m: f'${m.group(0)}$',
-        text
-    )
-
-    # 行內含有 ^ 或 _ 但沒有 $ 的算式（例如 x^2、a_1）
-    text = wrap_if_naked(
-        r'[a-zA-Z][_\^][{0-9a-zA-Z][^$\n]{0,20}',
-        lambda m: f'${m.group(0)}$',
-        text
-    )
-
-    # ── Step 7：整行掃尾 — 整行都是裸 LaTeX 的，整行包起來 ──
-    lines = text.split('\n')
-    fixed_lines = []
-    for line in lines:
-        stripped = line.strip()
-        # 這行含有 LaTeX 命令但完全沒有 $
-        if re.search(r'\\[a-zA-Z]', stripped) and '$' not in stripped and stripped:
-            line = '$' + stripped + '$'
-        fixed_lines.append(line)
-    text = '\n'.join(fixed_lines)
-
-    # ── Step 8：清理多餘的 $$ 巢狀（$$$ 或 $$$$）──
-    text = re.sub(r'\$\$\$+', '$$', text)
-    # 清理空的 $ $ 或 $  $
-    text = re.sub(r'\$\s*\$', '', text)
-
-    # ── Step 9：垂直膠水 — 中文句子裡不必要的換行 ──
-    for _ in range(2):
+    # Step 5：修中文句子裡不必要的換行（例如「三角形\nABC」→「三角形 ABC」）
+    for _ in range(3):
         text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
         cjk = r'[\u4e00-\u9fa5]'
-        short_content = r'(?:(?!\n|•|- |\* ).){1,30}'
-        pattern = f'(?<={cjk})\s*\\n+\s*({short_content})\s*\\n+\s*(?={cjk}|[，。！？：,.?])'
-        text = re.sub(pattern, r' \1 ', text)
+        # 中文字後面換行，下一行是短內容，再換行，後面又是中文 → 合併
+        text = re.sub(
+            rf'({cjk})\s*\n\s*([^\n${{}}\\]{{1,20}})\s*\n\s*(?={cjk})',
+            r'\1\2',
+            text
+        )
+
+    # Step 6：清理多餘空行（連續超過 2 個空行，壓縮成 1 個）
+    text = re.sub(r'\n{3,}', '\n\n', text)
 
     return text
 
-def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
-    try:
-        keys = st.secrets["API_KEYS"]
-        if isinstance(keys, str): keys = [keys]
-    except:
-        st.error("API_KEYS 設定錯誤")
-        st.stop()
-    
-    target_keys = keys.copy() 
-    if use_pro:
-        model_name = 'models/gemini-2.5-pro'
-    else:
-        model_name = 'models/gemini-2.5-flash'
-    last_error = None
-    for key in target_keys:
-        try:
-            genai.configure(api_key=key)
-            model = genai.GenerativeModel(model_name)
-            if image_input:
-                response = model.generate_content([prompt_content, image_input])
-            else:
-                response = model.generate_content(prompt_content)
-            return response, key[-4:] 
-        except Exception as e:
-            if "429" in str(e) or "Quota" in str(e) or "503" in str(e):
-                last_error = e
-                continue
-            else:
-                raise e
-    raise last_error
 
-# --- 輔助函式：產生 Prompt ---
+# =====================================================================
+# 【核心改動 2】build_prompt — 新策略：強制 Gemini 只用 $$ 包數學
+# =====================================================================
 def build_prompt(grade, target, mode):
     guardrail = "【過濾機制】請辨識圖片內容。若明顯為「自拍照、風景照、寵物照」等與學習無關的圖片，請回傳 REFUSE_OFF_TOPIC。若是數學題目、文字截圖、圖表分析，即使模糊或非典型格式，也請回答。"
     transcription = f"【隱藏任務】將題目 '{target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
+
+    # ── 全新 formatting 區塊：策略改為只用 $$，讓 Streamlit 直接渲染 ──
     formatting = """
-   【排版絕對指令 - 違反即重做】
+【排版絕對指令 — 違反即重做】
 
-    ★ 規則 A：每一個數學式，無論長短，必須用 $ 包裹。
-       - 錯誤：\\cos C = \\frac{2}{4\\sqrt{7}}
-       - 正確：$\\cos C = \\frac{2}{4\\sqrt{7}}$
-       - 錯誤：\\sin^2 C + \\cos^2 C = 1
-       - 正確：$\\sin^2 C + \\cos^2 C = 1$
+★ 唯一數學格式：所有數學符號、算式、變數，一律使用「雙錢號」 $$ 包裹，獨立一行顯示。
+   ✅ 正確範例：
+      $$c^2 = a^2 + b^2 - 2ab\cos C$$
+      $$\cos C = \frac{1}{2\sqrt{7}}$$
+      $$\sin C = \frac{3\sqrt{21}}{14}$$
 
-    ★ 規則 B：一個完整的算式，必須寫在同一行，嚴禁中途換行。
-       - 錯誤：$\\cos C =\n\\frac{2}{4\\sqrt{7}}$
-       - 正確：$\\cos C = \\frac{2}{4\\sqrt{7}}$
+   ❌ 嚴禁使用單錢號行內式（如 $x^2$）
+   ❌ 嚴禁使用 Markdown 代碼塊（``` 或 `）
+   ❌ 嚴禁裸奔 LaTeX（如直接寫 \cos C 而不包 $$）
 
-    ★ 規則 C：禁止在數學式前後加上 Markdown 代碼塊 (``` 或 `)。
+★ 算式完整性：每一條算式必須完整寫在同一個 $$ 區塊內，嚴禁中途換行或拆成多個 $$ 區塊。
+   ❌ 錯誤：
+      $$\cos C =$$
+      $$\frac{1}{2\sqrt{7}}$$
+   ✅ 正確：
+      $$\cos C = \frac{1}{2\sqrt{7}}$$
 
-    ★ 規則 D：禁止在每個詞語後面換行。段落內容請保持連貫，同一觀念寫在同一段落。
+★ 文字段落：中文解說請寫成完整段落，嚴禁在每個詞語後面換行。
+   ❌ 錯誤：首先，我們需要計算三角形\nABC\n的面積
+   ✅ 正確：首先，我們需要計算三角形 ABC 的面積。
 
-    ★ 規則 E：顯示帶有分數的大型算式時，請使用 $$ 雙錢號讓它獨立一行。
-       - 正確：$$\\sin C = \\sqrt{1 - \\left(\\frac{1}{2\\sqrt{7}}\\right)^2}$$
-    """
+★ 無程式碼：解說文字中嚴禁出現 Python 運算或繪圖代碼。
+"""
+
     plotting = """
-    【繪圖能力啟動】
-    1. 只有當題目明確涉及「函數圖形」、「幾何座標」、「統計圖表」時，才生成 Python 程式碼。
-    2. 程式碼必須能直接執行，並包在 `===PLOT===` 與 `===PLOT_END===` 之間。
-    3. 圖表標題、座標軸請使用中文。
-    4. ⚠️ 嚴格 LaTeX 規範：所有包含 LaTeX 語法的字串（如標題、標籤），**必須** 使用 Python raw string (例如 r'$y=x^2$')。
-    5. ⚠️ 避免在 title 使用過於複雜的 LaTeX (如 \left, \right)，若必須使用，請確保語法完美閉合。
-    6. ⚠️ 3D繪圖：若是空間坐標題，請務必使用 `ax = fig.add_subplot(111, projection='3d')`。
-    """
+【繪圖能力啟動】
+1. 只有當題目明確涉及「函數圖形」、「幾何座標」、「統計圖表」時，才生成 Python 程式碼。
+2. 程式碼必須能直接執行，並包在 `===PLOT===` 與 `===PLOT_END===` 之間。
+3. 圖表標題、座標軸請使用中文。
+4. ⚠️ 所有含 LaTeX 語法的字串，必須使用 Python raw string（例如 r'$y=x^2$'）。
+5. ⚠️ 避免在 title 使用過於複雜的 LaTeX（如 \left, \right）。
+6. ⚠️ 3D繪圖：若是空間坐標題，請使用 `ax = fig.add_subplot(111, projection='3d')`。
+"""
+
     common_role = f"角色：你是 Jutor。年級：{grade}。題目：{target}。"
     if grade in ["小五", "小六"]:
         common_role += "【重要】學生為台灣國小生，請嚴格遵守台灣國小數學課綱：1. 避免使用二元一次聯立方程式或過於抽象的代數符號(x,y)。2. 多使用「線段圖」、「基準量比較量」或具體數字推演來解釋。3. 語言要更白話、具體。"
@@ -419,7 +310,7 @@ def build_prompt(grade, target, mode):
         4. 任務：除了使用上述金句，請發揮創意繼續吐槽學生的智商，展現出「這種題目也能錯？」的崩潰感，但最後必須「無奈地」把題目教懂。
         """
     else:
-        style = "風格：幽默口語。" 
+        style = "風格：幽默口語。"
 
     return f"""
     {guardrail}
@@ -428,7 +319,7 @@ def build_prompt(grade, target, mode):
     {plotting}
     {common_role}
     {style}
-    
+
     【題型辨識】請判斷是否為多選題，若有選出所有正確選項的指令，請逐一檢查。
 
     【輸出結構嚴格要求 - 請用 `===STEP===` 分隔】
@@ -439,25 +330,26 @@ def build_prompt(grade, target, mode):
     (步驟2...)
     ===STEP===
     ...
-    
+
     2. **本題答案** (標題與答案必須在同一個STEP)
     ### 💡 本題答案
     (請在此列出最終答案，如 x=16 或 x=18)
-    
+
     ===STEP===
-    
+
     3. **驗收類題** (標題與題目必須在同一個STEP)
     ### 🎯 驗收類題
     (請在此處直接出題，包含所有題目資訊)
-    
+
     ===STEP===
-    
+
     4. **類題答案** (最後一個STEP)
     🗝️ 類題答案
     (僅提供最終答案，不需詳解)
     """
 
-col1, col2 = st.columns([1, 4]) 
+
+col1, col2 = st.columns([1, 4])
 with col1:
     if os.path.exists(main_logo_path):
         st.image(main_logo_path, use_column_width=True)
@@ -466,7 +358,7 @@ with col1:
 
 with col2:
     st.title("鳩特數理-AI Jutor")
-    st.caption("Jutor AI 教學系統 v10.0 (智慧內顯修復版 12/30)")
+    st.caption("Jutor AI 教學系統 v11.0 ($$雙錢號穩定版)")
 
 st.markdown("---")
 col_grade_label, col_grade_select = st.columns([2, 3])
@@ -477,6 +369,37 @@ with col_grade_select:
     selected_grade = st.selectbox("年級", ("小五", "小六", "國一", "國二", "國三", "高一", "高二", "高三"), label_visibility="collapsed")
 st.markdown("---")
 
+def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
+    try:
+        keys = st.secrets["API_KEYS"]
+        if isinstance(keys, str): keys = [keys]
+    except:
+        st.error("API_KEYS 設定錯誤")
+        st.stop()
+
+    target_keys = keys.copy()
+    if use_pro:
+        model_name = 'models/gemini-2.5-pro'
+    else:
+        model_name = 'models/gemini-2.5-flash'
+    last_error = None
+    for key in target_keys:
+        try:
+            genai.configure(api_key=key)
+            model = genai.GenerativeModel(model_name)
+            if image_input:
+                response = model.generate_content([prompt_content, image_input])
+            else:
+                response = model.generate_content(prompt_content)
+            return response, key[-4:]
+        except Exception as e:
+            if "429" in str(e) or "Quota" in str(e) or "503" in str(e):
+                last_error = e
+                continue
+            else:
+                raise e
+    raise last_error
+
 if not st.session_state.is_solving:
     st.subheader("📸 1️⃣ 上傳題目 & 指定")
     uploaded_file = st.file_uploader("選擇圖片 (JPG, PNG)", type=["jpg", "png", "jpeg"], label_visibility="collapsed")
@@ -485,11 +408,11 @@ if not st.session_state.is_solving:
         image = Image.open(uploaded_file)
         st.image(image, caption='題目預覽', use_column_width=True)
         question_target = st.text_input("你想問圖片中的哪一題？", placeholder="例如：第 5 題...")
-        
+
         st.markdown("### 🚀 選擇解題模式：")
-        
+
         col_btn_verbal, col_btn_math, col_btn_toxic = st.columns([1, 1, 1])
-        
+
         with col_btn_verbal:
             start_verbal = st.button("🗣️ 口語教學", use_container_width=True, type="primary")
         with col_btn_math:
@@ -502,19 +425,19 @@ if not st.session_state.is_solving:
                 st.warning("⚠️ 請先輸入你想問哪一題！")
             else:
                 st.session_state.last_question_text = question_target
-                
+
                 if st.session_state.trigger_rescue:
                     mode = st.session_state.solve_mode
-                    use_pro = True 
+                    use_pro = True
                     st.session_state.use_pro_model = True
-                    st.session_state.trigger_rescue = False 
+                    st.session_state.trigger_rescue = False
                 else:
                     if start_toxic: mode = "toxic"
                     elif start_math: mode = "math"
                     else: mode = "verbal"
-                    
+
                     st.session_state.solve_mode = mode
-                    use_pro = False 
+                    use_pro = False
                     st.session_state.use_pro_model = False
 
                 if use_pro:
@@ -524,17 +447,16 @@ if not st.session_state.is_solving:
                         loading_text = "Jutor AI (2.5) 正在深呼吸準備開罵..."
                     else:
                         loading_text = "Jutor AI (2.5) 正在思考怎麼教會你這題..."
-                
+
                 with st.spinner(loading_text):
                     try:
                         if uploaded_file is not None:
                             st.session_state.uploaded_file_bytes = uploaded_file.getvalue()
 
                         prompt = build_prompt(selected_grade, question_target, mode)
-
                         response, key_suffix = call_gemini_with_rotation(prompt, image, use_pro=use_pro)
                         st.session_state.used_key_suffix = key_suffix
-                        
+
                         if "REFUSE_OFF_TOPIC" in response.text:
                             st.error("🙅‍♂️ 這個學校好像不會考喔！(若為誤判，請嘗試裁切圖片)")
                         else:
@@ -544,7 +466,7 @@ if not st.session_state.is_solving:
                             if desc_match:
                                 image_desc = desc_match.group(1).strip()
                                 full_text = full_text.replace(desc_match.group(0), "")
-                            
+
                             st.session_state.image_desc_cache = image_desc
                             st.session_state.full_text_cache = full_text
 
@@ -556,9 +478,9 @@ if not st.session_state.is_solving:
                                 plot_code = plot_match.group(1).strip()
                                 plot_code = plot_code.replace("```python", "").replace("```", "")
                                 full_text = full_text.replace(plot_match.group(0), "")
-                            
+
                             st.session_state.plot_code = plot_code
-                            
+
                             raw_steps = full_text.split("===STEP===")
                             st.session_state.solution_steps = [step.strip() for step in raw_steps if step.strip()]
                             st.session_state.step_index = 0
@@ -573,15 +495,16 @@ if not st.session_state.is_solving:
                             st.rerun()
 
                     except Exception as e:
-                        if "429" in str(e) or "Quota" in str(e): 
+                        if "429" in str(e) or "Quota" in str(e):
                             st.warning("🥵 系統忙碌中...")
                             st.error("請稍候重試！")
-                        else: st.error(f"錯誤：{e}")
+                        else:
+                            st.error(f"錯誤：{e}")
 
 # ================= 解題互動 =================
 
 if st.session_state.is_solving and st.session_state.solution_steps:
-    
+
     if st.session_state.solve_mode == "verbal":
         header_text = "🗣️ Jutor 口語教學中"
     elif st.session_state.solve_mode == "math":
@@ -594,8 +517,8 @@ if st.session_state.is_solving and st.session_state.solution_steps:
     if st.session_state.use_pro_model:
         st.markdown(f"### {header_text} (🔥 2.5 Pro 救援)")
     else:
-        st.markdown(f"### {header_text}") 
-    
+        st.markdown(f"### {header_text}")
+
     if st.session_state.plot_code:
         with st.expander("📊 查看幾何/函數圖形", expanded=True):
             execute_and_show_plot(st.session_state.plot_code)
@@ -606,14 +529,14 @@ if st.session_state.is_solving and st.session_state.solution_steps:
     for i in range(st.session_state.step_index):
         with st.chat_message("assistant", avatar=assistant_avatar):
             st.markdown(st.session_state.solution_steps[i])
-            
+
     current_step_text = st.session_state.solution_steps[st.session_state.step_index]
     with st.chat_message("assistant", avatar=assistant_avatar):
         trigger_vibration()
         st.markdown(current_step_text)
 
     total_steps = len(st.session_state.solution_steps)
-    
+
     # --- 回報區塊 ---
     if st.session_state.is_reporting:
         st.markdown("---")
@@ -621,7 +544,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
             st.markdown("### 🚨 錯誤回報")
             student_name = st.text_input("請輸入你的名字 (方便老師回覆你)：", placeholder="例如：王小明")
             student_comment = st.text_area("請告訴 Jutor 哪裡怪怪的？", height=100)
-            
+
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("取消", use_container_width=True):
@@ -633,12 +556,12 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                         st.warning("請填寫名字和問題描述喔！")
                     else:
                         success = send_telegram_alert(
-                             selected_grade, 
-                             st.session_state.image_desc_cache, 
-                             st.session_state.full_text_cache,
-                             student_comment,
-                             student_name,
-                             st.session_state.uploaded_file_bytes
+                            selected_grade,
+                            st.session_state.image_desc_cache,
+                            st.session_state.full_text_cache,
+                            student_comment,
+                            student_name,
+                            st.session_state.uploaded_file_bytes
                         )
                         if success:
                             st.session_state.is_reporting = False
@@ -653,7 +576,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
         if not st.session_state.in_qa_mode:
             st.markdown("---")
             col_back, col_ask, col_next = st.columns([1, 1, 2])
-            
+
             with col_back:
                 def prev_step():
                     if st.session_state.step_index > 0:
@@ -670,9 +593,9 @@ if st.session_state.is_solving and st.session_state.solution_steps:
 
             with col_next:
                 btn_label = "✅ 我懂了，下一步！"
-                if st.session_state.step_index == total_steps - 2: 
+                if st.session_state.step_index == total_steps - 2:
                     btn_label = "👀 核對類題答案"
-                
+
                 def next_step():
                     st.session_state.step_index += 1
                 st.button(btn_label, on_click=next_step, use_container_width=True, type="primary")
@@ -681,19 +604,19 @@ if st.session_state.is_solving and st.session_state.solution_steps:
             with st.container(border=True):
                 st.markdown("#### 💡 提問時間")
                 for msg in st.session_state.qa_history[2:]:
-                      if msg["role"] == "user": 
-                          icon = "👤"
-                      else: 
-                          icon = assistant_avatar
-                      
-                      with st.chat_message(msg["role"], avatar=icon):
-                          st.markdown(msg["parts"][0])
-                          
+                    if msg["role"] == "user":
+                        icon = "👤"
+                    else:
+                        icon = assistant_avatar
+
+                    with st.chat_message(msg["role"], avatar=icon):
+                        st.markdown(msg["parts"][0])
+
                 user_question = st.chat_input("請輸入問題...")
                 if user_question:
                     with st.chat_message("user", avatar="👤"): st.markdown(user_question)
                     st.session_state.qa_history.append({"role": "user", "parts": [user_question]})
-                    
+
                     with st.chat_message("assistant", avatar=assistant_avatar):
                         with st.spinner("思考中..."):
                             try:
@@ -701,8 +624,10 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                                 response, _ = call_gemini_with_rotation(full_prompt, use_pro=st.session_state.use_pro_model)
                                 st.markdown(response.text)
                                 st.session_state.qa_history.append({"role": "model", "parts": [response.text]})
-                            except: st.error("忙碌中")
+                            except:
+                                st.error("忙碌中")
                     st.rerun()
+
                 def exit_qa_mode():
                     st.session_state.in_qa_mode = False
                     st.session_state.qa_history = []
@@ -711,7 +636,7 @@ if st.session_state.is_solving and st.session_state.solution_steps:
     else:
         st.markdown("---")
         st.success("🎉 恭喜完成！")
-        
+
         col_end_back, col_end_reset = st.columns([1, 2])
         with col_end_back:
             def prev_step_end():
@@ -730,90 +655,75 @@ if st.session_state.is_solving and st.session_state.solution_steps:
                 st.session_state.uploaded_file_bytes = None
                 st.rerun()
 
-    # --- v9.9 原地復活重刷 (不會白畫面) ---
+    # --- 底部工具列 ---
     if not st.session_state.is_reporting:
         st.markdown("")
         st.markdown("")
-        
+
         col_util_1, col_util_2 = st.columns(2)
-        
+
         with col_util_1:
             if st.button("🔧 內容沒錯但亂碼？點我修復", use_container_width=True):
                 st.toast("🚑 正在請求主任醫師 (Pro) 進行微創手術...", icon="👨‍⚕️")
-                
+
                 try:
                     bad_text = st.session_state.full_text_cache
-                    
+
                     if not bad_text:
                         st.warning("⚠️ 目前沒有內容可以修復喔！")
                     else:
-                        # --- 建構修復專用 Prompt (強化版) ---
                         repair_prompt = f"""
-                        【任務：Streamlit LaTeX 格式渲染修復】
-                        你是一個 Python Streamlit 介面優化專家。
-                        目前的數學教學文本無法在 Streamlit 中正確渲染，因為缺少了 LaTeX 分隔符號。
-                        
-                        請重新輸出下方的文本，並嚴格遵守以下規則：
-                        
-                        1. ✅ **強制包裹數學式**：
-                           所有的 LaTeX 數學語法（例如 `\\frac`, `\\sqrt`, `^2`, `\\approx`, `\\pm` 等），**必須**前後加上單錢字號 `$` 包裹。
-                           - 錯誤範例： `y = x^2`
-                           - 正確範例： `$y = x^2$`
-                           - 錯誤範例： `\\frac{{1}}{{2}}`
-                           - 正確範例： `$\\frac{{1}}{{2}}$`
-                        
-                        2. 🛡️ **巢狀結構注意**：
-                           遇到複雜數學式（如分數內有根號），請確保 `$` 包裹在最外層。
-                           - 正確： `$\\frac{{-b \\pm \\sqrt{{b^2-4ac}}}}{{2a}}$`
-                        
-                        3. 🚫 **禁止更動內容**：
-                           嚴禁修改原本的中文解說、數字或計算步驟，僅做格式標記。
-                        
-                        ---待修復文本---
-                        {bad_text}
-                        ---結束---
-                        """
+【任務：Streamlit LaTeX 格式修復】
+你是 Streamlit 介面優化專家。請修復下方數學教學文本的格式，讓它能在 Streamlit 中正確渲染。
+
+【唯一規則：所有數學式一律用 $$ 雙錢號獨立一行包裹】
+
+✅ 正確範例：
+$$c^2 = a^2 + b^2 - 2ab\cos C$$
+$$\cos C = \frac{{1}}{{2\sqrt{{7}}}}$$
+
+❌ 嚴禁：
+- 單錢號行內式（$x^2$）
+- Markdown 代碼塊（``` 或 `）
+- 裸奔 LaTeX（直接寫 \cos C 不包 $$）
+- 算式拆成多個 $$ 區塊
+
+【嚴禁修改】中文解說內容、數字、計算步驟一律不動，只修格式標記。
+
+---待修復文本---
+{bad_text}
+---結束---
+"""
 
                         with st.spinner("🔧 Jutor Pro 正在精細排版中..."):
-                            # ⚠️ 關鍵修改：這裡強制 use_pro=True，確保指令遵循度最高
                             response, _ = call_gemini_with_rotation(repair_prompt, image_input=None, use_pro=True)
-                            
-                            # 取得修復後的文字
-                            fixed_text = response.text
-                            
-                            # 再次清洗 (主要為了去除可能多餘的 markdown code block 符號)
-                            fixed_text = clean_output_format(fixed_text)
-                            
-                            # --- 保存與更新狀態 ---
+                            fixed_text = clean_output_format(response.text)
+
                             st.session_state.full_text_cache = fixed_text
-                            
-                            # 嘗試保留圖表代碼 (如果修復過程中 AI 遺漏的話)
+
                             plot_code = None
                             if "===PLOT===" in fixed_text and "===PLOT_END===" not in fixed_text:
                                 fixed_text += "\n===PLOT_END==="
                             plot_match = re.search(r"===PLOT===(.*?)===PLOT_END===", fixed_text, re.DOTALL)
-                            
+
                             if plot_match:
                                 plot_code = plot_match.group(1).strip()
                                 plot_code = plot_code.replace("```python", "").replace("```", "")
                                 fixed_text = fixed_text.replace(plot_match.group(0), "")
-                            
-                            # 如果 AI 修復後把 plot 弄丟了，從舊紀錄找回來
+
                             if not plot_code and st.session_state.plot_code:
                                 plot_code = st.session_state.plot_code
                             else:
                                 st.session_state.plot_code = plot_code
 
-                            # 更新步驟
                             raw_steps = fixed_text.split("===STEP===")
                             st.session_state.solution_steps = [step.strip() for step in raw_steps if step.strip()]
-                            
-                            # 重新渲染
+
                             st.rerun()
 
                 except Exception as e:
                     st.error(f"修復失敗：{e}")
-        
+
         with col_util_2:
             if st.button("🚨 答案有錯，回報給鳩特", use_container_width=True, type="secondary"):
                 st.session_state.is_reporting = True
