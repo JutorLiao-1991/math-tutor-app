@@ -194,19 +194,23 @@ def execute_and_show_plot(code_snippet):
         st.warning(f"圖形繪製失敗: {e}")
 
 # --- v10.0 智慧內顯修復邏輯 ---
+import re
+
 def clean_output_format(text):
-    if not text: return text
-    text = text.strip().lstrip("'").lstrip('"').rstrip("'").rstrip('"')
-    
-    # 1. 貨幣保護：將 $100 轉為 \$100，避免誤判為數學開始
+    if not text:
+        return text
+    text = text.strip().lstrip("'\"").rstrip("'\"")
+
+    # ── Step 1：貨幣保護，$100 → \$100，避免被誤判為數學開始 ──
     text = re.sub(r'(?<!\\)\$(\d+)', r'\\$\1', text)
 
-    # 2. 移除 Code Blocks
-    text = re.sub(r'```python[\s\S]*?```', '', text) 
+    # ── Step 2：移除 Code Blocks ──
+    text = re.sub(r'```python[\s\S]*?```', '', text)
     text = text.replace("```latex", "").replace("```", "")
-    text = re.sub(r'`([^`\n]+)`', r'$\1$', text) # 反引號殺手
+    # 反引號包住的內容，改成 $ 包裹
+    text = re.sub(r'`([^`\n]+)`', r'$\1$', text)
 
-    # 3. 程式碼洩漏消音
+    # ── Step 3：程式碼洩漏消音（避免 plt / np 代碼出現在說明文字裡）──
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
@@ -219,43 +223,114 @@ def clean_output_format(text):
         cleaned_lines.append(line)
     text = "\n".join(cleaned_lines)
 
-    # 4. 裸奔矩陣修復
-    text = re.sub(r'(?<!\$)(\\begin\{[a-z]+\}[\s\S]*?\\end\{[a-z]+\})(?!\$)', r'$$\1$$', text)
+    # ── Step 4：裸奔矩陣修復（\begin{} 沒有 $$ 包裹）──
+    text = re.sub(
+        r'(?<!\$)(\\begin\{[a-z\*]+\}[\s\S]*?\\end\{[a-z\*]+\})(?!\$)',
+        r'$$\1$$',
+        text
+    )
 
-    # 5. 【核心更新：智慧穿衣 + 內衣移除】
-    # 定義一個 callback 函數，專門處理 \vec{...} 內部的 $
-    def smart_wrap_vec(match):
-        content = match.group(1) # 抓到花括號裡的內容
-        content = content.replace('$', '') # 脫掉裡面的內衣 (移除 $)
-        return f"$\\vec{{{content}}}$" # 穿上乾淨的外衣
+    # ── Step 5：核心 — 先把換行切斷的 LaTeX 接回來 ──
+    # 狀況：一個算式被換行拆成多段，例如：
+    #   \cos C =
+    #   \frac{2}{4\sqrt{7}}
+    # 先把以 LaTeX 命令或運算符結尾的行，和下一行合併
+    for _ in range(5):  # 多跑幾輪，處理多層斷行
+        # 以 LaTeX 命令或 = + - * / 結尾的行 → 和下一行合併
+        text = re.sub(r'(\\[a-zA-Z]+(?:\{[^}]*\})*)\s*\n\s*(\\[a-zA-Z{(])', r'\1 \2', text)
+        text = re.sub(r'([=+\-*/^_,])\s*\n\s*(\\[a-zA-Z{(0-9\-])', r'\1 \2', text)
+        # 以 { 結尾（分數分子還沒結束）→ 合併
+        text = re.sub(r'(\{[^}]*)\n\s*([^}]*\})', r'\1 \2', text)
+        # 孤立的 ^2 C、^2 開頭的行 → 合併到上一行
+        text = re.sub(r'\n\s*(\^[0-9a-zA-Z])', r'\1', text)
 
-    def smart_wrap_frac(match):
-        num = match.group(1).replace('$', '')
-        den = match.group(2).replace('$', '')
-        return f"$\\frac{{{num}}}{{{den}}}$"
+    # ── Step 6：智慧穿衣 — 把還沒被 $ 包住的 LaTeX 命令包起來 ──
 
-    # 套用智慧修復
-    text = re.sub(r'(?<!\$)\\vec\{([^}]+)\}(?!\$)', smart_wrap_vec, text)
-    text = re.sub(r'(?<!\$)\\frac\{([^}]+)\}\{([^}]+)\}(?!\$)', smart_wrap_frac, text)
-    text = re.sub(r'(?<!\$)\\sqrt\{([^}]+)\}(?!\$)', lambda m: f"$\\sqrt{{{m.group(1).replace('$', '')}}}$", text)
+    def wrap_if_naked(pattern, replacement_fn, text):
+        """只在不在 $ ... $ 範圍內的地方套用替換"""
+        result = []
+        last = 0
+        # 先找出所有已經在 $ 內的區段，跳過它們
+        dollar_ranges = []
+        for m in re.finditer(r'\$\$[\s\S]*?\$\$|\$[^\$\n]+?\$', text):
+            dollar_ranges.append((m.start(), m.end()))
 
-    # 修復其他常見符號 (無參數的)
-    text = re.sub(r'(?<!\$)\\(sin|cos|tan|cot|lim|sum|int|theta|pi|cdot|times)(?![a-zA-Z])(?!\$)', r'$\\\1$', text)
+        def in_dollar(pos):
+            for s, e in dollar_ranges:
+                if s <= pos < e:
+                    return True
+            return False
 
-    # 6. 垂直膠水
-    for _ in range(2): 
-        text = re.sub(r'\n\s*([=+\-*/|<>])\s*\n', r' \1 ', text)
-        text = re.sub(r'\n\s*(\\[a-zA-Z]+(?:\{.*?\})?)\s*\n', r' \1 ', text)
-    
-    # 7. 基本修復
-    text = re.sub(r'([\(（])\s*\n\s*(.*?)\s*\n\s*([\)）])', r'\1\2\3', text)
-    text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
-    cjk = r'[\u4e00-\u9fa5]'
-    short_content = r'(?:(?!\n|•|- |\* ).){1,30}' 
+        for m in re.finditer(pattern, text):
+            if not in_dollar(m.start()):
+                result.append(text[last:m.start()])
+                result.append(replacement_fn(m))
+                last = m.end()
+        result.append(text[last:])
+        return ''.join(result)
+
+    # 複雜算式（含有 \frac, \sqrt, \left, \right 的整段）
+    text = wrap_if_naked(
+        r'\\frac\{[^}]+\}\{[^}]+\}',
+        lambda m: f'${m.group(0)}$',
+        text
+    )
+    text = wrap_if_naked(
+        r'\\sqrt\{[^}]+\}',
+        lambda m: f'${m.group(0)}$',
+        text
+    )
+    text = wrap_if_naked(
+        r'\\vec\{[^}]+\}',
+        lambda m: f'${m.group(0)}$',
+        text
+    )
+
+    # 帶參數的三角函數式，例如 \cos C、\sin^2 C
+    text = wrap_if_naked(
+        r'\\(sin|cos|tan|cot|sec|csc)\s*[\^]?[0-9]?\s*[A-Za-z]',
+        lambda m: f'${m.group(0)}$',
+        text
+    )
+
+    # 無參數符號：\theta \pi \cdot \times \approx \pm \leq \geq \neq \infty
+    text = wrap_if_naked(
+        r'\\(theta|alpha|beta|gamma|delta|pi|infty|cdot|times|approx|pm|leq|geq|neq|sum|int|lim)(?![a-zA-Z])',
+        lambda m: f'${m.group(0)}$',
+        text
+    )
+
+    # 行內含有 ^ 或 _ 但沒有 $ 的算式（例如 x^2、a_1）
+    text = wrap_if_naked(
+        r'[a-zA-Z][_\^][{0-9a-zA-Z][^$\n]{0,20}',
+        lambda m: f'${m.group(0)}$',
+        text
+    )
+
+    # ── Step 7：整行掃尾 — 整行都是裸 LaTeX 的，整行包起來 ──
+    lines = text.split('\n')
+    fixed_lines = []
+    for line in lines:
+        stripped = line.strip()
+        # 這行含有 LaTeX 命令但完全沒有 $
+        if re.search(r'\\[a-zA-Z]', stripped) and '$' not in stripped and stripped:
+            line = '$' + stripped + '$'
+        fixed_lines.append(line)
+    text = '\n'.join(fixed_lines)
+
+    # ── Step 8：清理多餘的 $$ 巢狀（$$$ 或 $$$$）──
+    text = re.sub(r'\$\$\$+', '$$', text)
+    # 清理空的 $ $ 或 $  $
+    text = re.sub(r'\$\s*\$', '', text)
+
+    # ── Step 9：垂直膠水 — 中文句子裡不必要的換行 ──
     for _ in range(2):
+        text = re.sub(r'\n\s*([，。、！？：,.?])', r'\1', text)
+        cjk = r'[\u4e00-\u9fa5]'
+        short_content = r'(?:(?!\n|•|- |\* ).){1,30}'
         pattern = f'(?<={cjk})\s*\\n+\s*({short_content})\s*\\n+\s*(?={cjk}|[，。！？：,.?])'
         text = re.sub(pattern, r' \1 ', text)
-        
+
     return text
 
 def call_gemini_with_rotation(prompt_content, image_input=None, use_pro=False):
@@ -294,11 +369,24 @@ def build_prompt(grade, target, mode):
     guardrail = "【過濾機制】請辨識圖片內容。若明顯為「自拍照、風景照、寵物照」等與學習無關的圖片，請回傳 REFUSE_OFF_TOPIC。若是數學題目、文字截圖、圖表分析，即使模糊或非典型格式，也請回答。"
     transcription = f"【隱藏任務】將題目 '{target}' 轉譯為文字，並將幾何特徵轉為文字描述，包在 `===DESC===` 與 `===DESC_END===` 之間。"
     formatting = """
-    【排版絕對指令】
-    1. **MATH ONLY LATEX**: 所有的數學符號、算式，必須使用 LaTeX 格式 (例如 `$x^2$`)。
-    2. **NO MARKDOWN CODE**: 嚴禁使用 Markdown 代碼塊 (``` 或 ` ) 來包裹數學式。這會導致顯示為紅色代碼。
-    3. **文字流暢**: 請輸出完整的段落。嚴禁在每個單詞或短語後換行，請保持語句連貫。
-    4. **無程式碼**: 絕對不要在文字解釋中顯示 Python 運算過程或繪圖代碼。
+   【排版絕對指令 - 違反即重做】
+
+    ★ 規則 A：每一個數學式，無論長短，必須用 $ 包裹。
+       - 錯誤：\\cos C = \\frac{2}{4\\sqrt{7}}
+       - 正確：$\\cos C = \\frac{2}{4\\sqrt{7}}$
+       - 錯誤：\\sin^2 C + \\cos^2 C = 1
+       - 正確：$\\sin^2 C + \\cos^2 C = 1$
+
+    ★ 規則 B：一個完整的算式，必須寫在同一行，嚴禁中途換行。
+       - 錯誤：$\\cos C =\n\\frac{2}{4\\sqrt{7}}$
+       - 正確：$\\cos C = \\frac{2}{4\\sqrt{7}}$
+
+    ★ 規則 C：禁止在數學式前後加上 Markdown 代碼塊 (``` 或 `)。
+
+    ★ 規則 D：禁止在每個詞語後面換行。段落內容請保持連貫，同一觀念寫在同一段落。
+
+    ★ 規則 E：顯示帶有分數的大型算式時，請使用 $$ 雙錢號讓它獨立一行。
+       - 正確：$$\\sin C = \\sqrt{1 - \\left(\\frac{1}{2\\sqrt{7}}\\right)^2}$$
     """
     plotting = """
     【繪圖能力啟動】
